@@ -769,7 +769,7 @@ fun BtLine(label: String, r: BtResult) {
 
 fun sweepLabel(r: SweepRow): String {
     val range = if (r.maxR > 0) "${fmtNum(r.minR)}×–${fmtNum(r.maxR)}×" else "≥ ${fmtNum(r.minR)}×"
-    return "${r.interval} · volume $range · TP ${fmtNum(r.tp)} % / SL ${fmtNum(r.sl)} %"
+    return "${r.interval} · volume $range · TP ${fmtNum(r.tp)} % / SL ${fmtNum(r.sl)} % · tendance ${if (r.trend) "✓" else "–"} · BTC ${if (r.btc) "✓" else "–"}"
 }
 
 @Composable
@@ -868,7 +868,7 @@ fun BacktestCard(
                 }
 
                 Text("Balayage automatique des réglages", fontWeight = FontWeight.SemiBold)
-                Muted("Teste environ 90 combinaisons (bougies 5 et 15 min, volume minimum et maximum, TP/SL) avec sortie à TP fixe. Les 60 % les plus anciens de la période servent à choisir, les 40 % les plus récents à vérifier. Seule la validation compte.")
+                Muted("Teste environ 380 combinaisons (bougies 5 et 15 min, volume minimum et maximum, TP/SL, avec et sans filtre de tendance, avec et sans filtre BTC) avec sortie à TP fixe. Les 60 % les plus anciens de la période servent à choisir, les 40 % les plus récents à vérifier. Seule la validation compte.")
                 Button(
                     onClick = {
                         busy = true
@@ -898,12 +898,17 @@ fun BacktestCard(
                     val holdUp = eligible.count { it.train.avgPct > 0 && it.valid.n >= 15 && it.valid.avgPct > 0 }
                     val positiveTrain = eligible.count { it.train.avgPct > 0 }
                     Muted("${rows.size} combinaisons testées · ${eligible.size} avec au moins 30 trades en optimisation · $holdUp restent positives en validation sur $positiveTrain positives en optimisation.")
+                    fun avgValid(sel: (SweepRow) -> Boolean): String {
+                        val l = rows.filter { sel(it) && it.valid.n >= 10 }
+                        return if (l.isEmpty()) "–" else fmtPct(l.map { it.valid.avgPct }.average())
+                    }
+                    Muted("Effet des filtres (rendement moyen par trade en validation, moyenne des combinaisons) · tendance : avec ${avgValid { it.trend }} / sans ${avgValid { !it.trend }} · BTC : avec ${avgValid { it.btc }} / sans ${avgValid { !it.btc }}")
                     if (ranked.isEmpty()) {
                         Muted("Aucune combinaison avec au moins 30 trades en optimisation : augmentez le nombre de cryptos ou assouplissez les filtres.")
                     }
                     ranked.forEachIndexed { idx, row ->
                         SweepRowCard(idx + 1, row) {
-                            update(cfg.copy(interval = row.interval, volThreshold = row.minR, volMax = row.maxR))
+                            update(cfg.copy(interval = row.interval, volThreshold = row.minR, volMax = row.maxR, trendFilter = row.trend, btcFilter = row.btc))
                             updateTc(tc.copy(tpPct = row.tp, slPct = row.sl, autoMinRatio = row.minR))
                             status = "Réglages appliqués : ${sweepLabel(row)}"
                         }

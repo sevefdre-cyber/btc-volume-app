@@ -19,8 +19,16 @@ data class Config(
     val wakeLock: Boolean = true,
     val maxWickPct: Double = 40.0,          // mèche haute max (% de la bougie), 100 = désactivé
     val max24hPct: Double = 50.0,           // hausse 24h max (%), 0 = désactivé
-    val btcFilter: Boolean = false,
+    val btcFilter: Boolean = true,
     val btcDropPct: Double = 1.0,           // baisse BTC (~1 h) au-delà de laquelle on bloque
+    val btcTrendFilter: Boolean = true,     // BTC : moyenne 10 >= moyenne 30 (bougies de 15 min)
+    val btcShockMax: Double = 3.0,          // choc de volatilité BTC maximal (x), 0 = désactivé
+    val atrMin: Double = 0.1,               // volatilité minimale (ATR en % du prix), 0 = désactivé
+    val atrMax: Double = 0.0,               // volatilité maximale (ATR %), 0 = désactivé
+    val rangeMinRatio: Double = 1.5,        // expansion de volatilité minimale (x), 0 = désactivé
+    val trendFilter: Boolean = true,        // écarte les cryptos en tendance baissière (MA10 < MA30)
+    val trendTolPct: Double = 0.0,          // tolérance de baisse MA10/MA30 (%)
+    val upCandleOnly: Boolean = true,       // bougie du signal haussière uniquement
     val favorites: Set<String> = emptySet(),
     val excluded: Set<String> = emptySet()
 )
@@ -53,6 +61,14 @@ object Prefs {
             max24hPct = p.dbl("max24hPct", d.max24hPct),
             btcFilter = p.getBoolean("btcFilter", d.btcFilter),
             btcDropPct = p.dbl("btcDropPct", d.btcDropPct),
+            btcTrendFilter = p.getBoolean("btcTrendFilter", d.btcTrendFilter),
+            btcShockMax = p.dbl("btcShockMax", d.btcShockMax),
+            atrMin = p.dbl("atrMin", d.atrMin),
+            atrMax = p.dbl("atrMax", d.atrMax),
+            rangeMinRatio = p.dbl("rangeMinRatio", d.rangeMinRatio),
+            trendFilter = p.getBoolean("trendFilter", d.trendFilter),
+            trendTolPct = p.dbl("trendTolPct", d.trendTolPct),
+            upCandleOnly = p.getBoolean("upCandleOnly", d.upCandleOnly),
             favorites = (p.getStringSet("favorites", emptySet()) ?: emptySet()).toSet(),
             excluded = (p.getStringSet("excluded", emptySet()) ?: emptySet()).toSet()
         )
@@ -77,6 +93,14 @@ object Prefs {
             .putString("max24hPct", cfg.max24hPct.toString())
             .putBoolean("btcFilter", cfg.btcFilter)
             .putString("btcDropPct", cfg.btcDropPct.toString())
+            .putBoolean("btcTrendFilter", cfg.btcTrendFilter)
+            .putString("btcShockMax", cfg.btcShockMax.toString())
+            .putString("atrMin", cfg.atrMin.toString())
+            .putString("atrMax", cfg.atrMax.toString())
+            .putString("rangeMinRatio", cfg.rangeMinRatio.toString())
+            .putBoolean("trendFilter", cfg.trendFilter)
+            .putString("trendTolPct", cfg.trendTolPct.toString())
+            .putBoolean("upCandleOnly", cfg.upCandleOnly)
             .putStringSet("favorites", HashSet(cfg.favorites))
             .putStringSet("excluded", HashSet(cfg.excluded))
             .apply()

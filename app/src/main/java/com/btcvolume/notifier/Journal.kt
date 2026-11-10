@@ -104,25 +104,38 @@ class SweepRow(
     val maxR: Double,
     val tp: Double,
     val sl: Double,
+    val trend: Boolean,
+    val btc: Boolean,
     val train: BtResult,
     val valid: BtResult
 )
 
 object Backtester {
     const val WINDOW = 30
-    private val STABLE = setOf(
-        "USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USDE", "USD1",
-        "AEUR", "EUR", "EURI", "XUSD", "UST", "USDS", "PYUSD", "RLUSD"
-    )
+    private const val BTC_MS = 900_000L
 
     class Feat(
         val ratio: DoubleArray,
         val change: DoubleArray,
         val wick: DoubleArray,
-        val chg24: DoubleArray
+        val chg24: DoubleArray,
+        val atr: DoubleArray,
+        val rangeRatio: DoubleArray,
+        val trend: DoubleArray,
+        val btcHas: BooleanArray,
+        val btcChg: DoubleArray,
+        val btcTrend: DoubleArray,
+        val btcShock: DoubleArray
     )
 
     class Series(val cs: List<Candle>, val f: Feat)
+
+    class BtcGrid(
+        val idx: HashMap<Long, Int>,
+        val chg: DoubleArray,
+        val trend: DoubleArray,
+        val shock: DoubleArray
+    )
 
     fun candidates(cfg: Config, maxN: Int): List<String> {
         val arr = JSONArray(Binance.publicGet("REAL", "/api/v3/ticker/24hr", mapOf("type" to "MINI")))
@@ -133,10 +146,13 @@ object Backtester {
             val sym = t.getString("symbol")
             if (!sym.endsWith("USDT")) continue
             val base = sym.removeSuffix("USDT")
-            if (base in STABLE || base in cfg.excluded) continue
+            if (base in cfg.excluded) continue
             val price = t.optString("lastPrice").toDoubleOrNull() ?: continue
             val qv = t.optString("quoteVolume").toDoubleOrNull() ?: continue
             if (price <= 0.0 || qv <= 0.0) continue
+            val hi = t.optString("highPrice").toDoubleOrNull() ?: price
+            val lo = t.optString("lowPrice").toDoubleOrNull() ?: price
+            if (Stables.isStable(base, price, hi, lo)) continue
             if (base in cfg.favorites || (price >= cfg.priceMin && price <= cfg.priceMax && qv >= cfg.minVol24h)) {
                 l.add(T(base, qv))
             }
@@ -175,13 +191,53 @@ object Backtester {
         return BtExit(pct(entry, cs[last].close * (1 - slip / 100)), last, "DUREE")
     }
 
-    fun features(cs: List<Candle>, ms: Long): Feat {
+    /** État de Bitcoin sur la grille de bougies de 15 min (mêmes définitions que le scan en direct). */
+    private fun btcGrid(): BtcGrid? {
+        return try {
+            val cs = Binance.candles("BTCUSDT", "15m", 1000)
+            val n = cs.size
+            val chg = DoubleArray(n)
+            val trend = DoubleArray(n)
+            val shock = DoubleArray(n)
+            val idx = HashMap<Long, Int>()
+            for (b in 30 until n) {
+                idx[cs[b].time] = b
+                chg[b] = if (cs[b - 4].close > 0) (cs[b].close - cs[b - 4].close) / cs[b - 4].close * 100 else 0.0
+                var s30 = 0.0
+                var s10 = 0.0
+                for (j in b - 29..b) {
+                    s30 += cs[j].close
+                    if (j > b - 10) s10 += cs[j].close
+                }
+                s30 /= 30.0
+                s10 /= 10.0
+                trend[b] = if (s30 > 0) (s10 - s30) / s30 * 100 else 0.0
+                var rs = 0.0
+                for (j in b - 20 until b) rs += (cs[j].high - cs[j].low) / cs[j].close * 100
+                val avgR = rs / 20.0
+                val r = (cs[b].high - cs[b].low) / cs[b].close * 100
+                shock[b] = if (avgR > 0) r / avgR else 0.0
+            }
+            BtcGrid(idx, chg, trend, shock)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun features(cs: List<Candle>, ms: Long, btc: BtcGrid?): Feat {
         val n = cs.size
         val k = (86_400_000L / ms).toInt()
         val ratio = DoubleArray(n)
         val change = DoubleArray(n)
         val wick = DoubleArray(n)
         val chg24 = DoubleArray(n)
+        val atr = DoubleArray(n)
+        val rangeRatio = DoubleArray(n)
+        val trend = DoubleArray(n)
+        val btcHas = BooleanArray(n)
+        val btcChg = DoubleArray(n)
+        val btcTrend = DoubleArray(n)
+        val btcShock = DoubleArray(n)
         for (i in WINDOW until n) {
             var avg = 0.0
             for (j in i - WINDOW until i) avg += cs[j].vol
@@ -192,8 +248,38 @@ object Backtester {
             val rng = c.high - c.low
             wick[i] = if (rng > 0) (c.high - max(c.open, c.close)) / rng * 100 else 0.0
             chg24[i] = if (i >= k && cs[i - k].close > 0) (c.close - cs[i - k].close) / cs[i - k].close * 100 else 0.0
+
+            // volatilité (ATR en %) et tendance (MA10 / MA30) sur les bougies qui précèdent le signal
+            var atrSum = 0.0
+            for (j in i - 14 until i) {
+                if (cs[j].close > 0) atrSum += (cs[j].high - cs[j].low) / cs[j].close * 100
+            }
+            val a = atrSum / 14.0
+            atr[i] = a
+            val rangePct = if (c.close > 0) rng / c.close * 100 else 0.0
+            rangeRatio[i] = if (a > 0) rangePct / a else 0.0
+            var s30 = 0.0
+            var s10 = 0.0
+            for (j in i - 30 until i) {
+                s30 += cs[j].close
+                if (j >= i - 10) s10 += cs[j].close
+            }
+            s30 /= 30.0
+            s10 /= 10.0
+            trend[i] = if (s30 > 0) (s10 - s30) / s30 * 100 else 0.0
+
+            if (btc != null) {
+                val closeT = c.time + ms
+                val b = btc.idx[(closeT / BTC_MS) * BTC_MS - BTC_MS]
+                if (b != null) {
+                    btcHas[i] = true
+                    btcChg[i] = btc.chg[b]
+                    btcTrend[i] = btc.trend[b]
+                    btcShock[i] = btc.shock[b]
+                }
+            }
         }
-        return Feat(ratio, change, wick, chg24)
+        return Feat(ratio, change, wick, chg24, atr, rangeRatio, trend, btcHas, btcChg, btcTrend, btcShock)
     }
 
     /** Trades d'une crypto pour un jeu de paramètres. Retourne (heure d'entrée, sortie). */
@@ -215,7 +301,13 @@ object Backtester {
                 (cfg.mode == "VOLUME" || abs(f.change[i]) >= cfg.priceThreshold) &&
                 f.wick[i] <= cfg.maxWickPct &&
                 (cfg.max24hPct <= 0.0 || f.chg24[i] <= cfg.max24hPct) &&
+                (cfg.atrMin <= 0.0 || f.atr[i] >= cfg.atrMin) &&
+                (cfg.atrMax <= 0.0 || f.atr[i] <= cfg.atrMax) &&
+                (cfg.rangeMinRatio <= 0.0 || f.rangeRatio[i] >= cfg.rangeMinRatio) &&
+                (!cfg.trendFilter || f.trend[i] >= -cfg.trendTolPct) &&
+                (!cfg.upCandleOnly || f.change[i] >= 0) &&
                 (!tc.buyOnlyUp || f.change[i] >= 0) &&
+                (!cfg.btcFilter || !f.btcHas[i] || !BtcRules.blocked(cfg, f.btcChg[i], f.btcTrend[i], f.btcShock[i])) &&
                 (cs[i].time - lastSigTime) >= cooldown
             ) {
                 lastSigTime = cs[i].time
@@ -263,13 +355,14 @@ object Backtester {
 
     private fun load(bases: List<String>, interval: String): List<Series> {
         val ms = VolumeService.intervalMs(interval)
+        val btc = btcGrid()
         val pool = Executors.newFixedThreadPool(6)
         try {
             val futures = bases.map { b ->
                 pool.submit(Callable<Series?> {
                     try {
                         val cs = Binance.candles(b + "USDT", interval, 1000)
-                        if (cs.size > WINDOW + 5) Series(cs, features(cs, ms)) else null
+                        if (cs.size > WINDOW + 5) Series(cs, features(cs, ms, btc)) else null
                     } catch (e: Exception) {
                         null
                     }
@@ -304,9 +397,9 @@ object Backtester {
     }
 
     /**
-     * Balayage : teste de nombreuses combinaisons (taille des bougies, intervalle de volume, TP/SL)
-     * avec une sortie à TP fixe. Les 60 % les plus anciens de la période servent à l'optimisation,
-     * les 40 % les plus récents à la validation hors échantillon.
+     * Balayage : bougies, intervalle de volume, TP/SL, avec et sans filtre de tendance, avec et sans
+     * filtre BTC. Les 60 % les plus anciens de la période servent à choisir, les 40 % les plus récents
+     * à valider hors échantillon.
      */
     fun sweep(
         cfg: Config, tc: TradeConfig, maxSymbols: Int, maxHold: Int,
@@ -320,6 +413,7 @@ object Backtester {
         val minRs = listOf(3.0, 5.0, 8.0, 12.0)
         val maxRs = listOf(0.0, 15.0, 25.0)
         val tpsl = listOf(Pair(3.0, 1.5), Pair(4.0, 2.0), Pair(6.0, 3.0), Pair(8.0, 4.0))
+        val flags = listOf(false, true)
         val rows = ArrayList<SweepRow>()
         for (iv in intervals) {
             progress("Téléchargement des bougies $iv…")
@@ -329,22 +423,27 @@ object Backtester {
             val tMax = series.maxOf { it.cs.last().time }
             val cut = tMin + ((tMax - tMin) * 0.6).toLong()
             var done = 0
-            for (minR in minRs) {
-                for (maxR in maxRs) {
-                    if (maxR > 0.0 && maxR <= minR) continue
-                    for (pr in tpsl) {
-                        val tc2 = tc.copy(tpPct = pr.first, slPct = pr.second)
-                        val all = ArrayList<Pair<Long, BtExit>>()
-                        for (s in series) all.addAll(trades(s, minR, maxR, tc2, 0.0, hold, cfg, slip))
-                        rows.add(
-                            SweepRow(
-                                iv, minR, maxR, pr.first, pr.second,
-                                aggregate(all.filter { it.first < cut }),
-                                aggregate(all.filter { it.first >= cut })
-                            )
-                        )
-                        done++
-                        if (done % 8 == 0) progress("Bougies $iv : $done combinaisons testées…")
+            for (tf in flags) {
+                for (bf in flags) {
+                    val cfg2 = cfg.copy(trendFilter = tf, btcFilter = bf)
+                    for (minR in minRs) {
+                        for (maxR in maxRs) {
+                            if (maxR > 0.0 && maxR <= minR) continue
+                            for (pr in tpsl) {
+                                val tc2 = tc.copy(tpPct = pr.first, slPct = pr.second)
+                                val all = ArrayList<Pair<Long, BtExit>>()
+                                for (s in series) all.addAll(trades(s, minR, maxR, tc2, 0.0, hold, cfg2, slip))
+                                rows.add(
+                                    SweepRow(
+                                        iv, minR, maxR, pr.first, pr.second, tf, bf,
+                                        aggregate(all.filter { it.first < cut }),
+                                        aggregate(all.filter { it.first >= cut })
+                                    )
+                                )
+                                done++
+                                if (done % 16 == 0) progress("Bougies $iv : $done combinaisons testées…")
+                            }
+                        }
                     }
                 }
             }

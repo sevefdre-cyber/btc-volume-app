@@ -14,7 +14,10 @@ data class ScanRow(
     val volUsdt: Double,     // volume de la bougie en USDT
     val candle: Long,        // heure d'ouverture de la bougie
     val wickPct: Double = 0.0,   // mèche haute en % de la bougie
-    val chg24: Double = 0.0      // variation sur 24 h en %
+    val chg24: Double = 0.0,     // variation sur 24 h en %
+    val atrPct: Double = 0.0,    // volatilité moyenne (ATR) en % du prix
+    val rangeRatio: Double = 0.0, // expansion de volatilité de la bougie
+    val trendPct: Double = 0.0   // écart MA10 / MA30 en % avant le signal
 )
 
 data class AlertItem(
@@ -33,6 +36,7 @@ object ScanState {
     val monitored = MutableStateFlow(0)
     val totalPairs = MutableStateFlow(0)
     val lastScan = MutableStateFlow(0L)
+    val btc = MutableStateFlow("")
 }
 
 object History {

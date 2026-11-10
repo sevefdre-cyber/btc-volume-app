@@ -269,20 +269,32 @@ class VolumeService : Service() {
         val now = System.currentTimeMillis()
         val sorted = rows.sortedByDescending { it.ratio }
         val threshold = if (cfg.volThreshold < 1.05) 1.05 else cfg.volThreshold
-        var btcOk = true
+        var btcReason: String? = null
         if (cfg.btcFilter) {
             try {
-                btcOk = btcChange() >= -cfg.btcDropPct
+                val info = btcInfo()
+                btcReason = BtcRules.reason(cfg, info)
+                ScanState.btc.value = "BTC · 1 h " + fmtPct(info.chg1h) + " · tendance " + fmtPct(info.trend) +
+                    " · volatilité x" + String.format(Locale.US, "%.1f", info.shock) + " → " +
+                    (if (btcReason == null) "✅ favorable" else "⛔ " + btcReason)
             } catch (e: Exception) {
-                btcOk = true   // si Bitcoin est inaccessible, on ne bloque pas
+                ScanState.btc.value = "BTC indisponible : filtre ignoré"
             }
+        } else {
+            ScanState.btc.value = "Filtre Bitcoin désactivé"
         }
+        val btcOk = btcReason == null
         val hits = if (!btcOk) emptyList() else sorted.filter { r ->
             r.ratio >= threshold &&
                 (cfg.volMax <= 0.0 || r.ratio <= cfg.volMax) &&
                 (cfg.mode == "VOLUME" || abs(r.changePct) >= cfg.priceThreshold) &&
                 r.wickPct <= cfg.maxWickPct &&
                 (cfg.max24hPct <= 0.0 || r.chg24 <= cfg.max24hPct) &&
+                (cfg.atrMin <= 0.0 || r.atrPct >= cfg.atrMin) &&
+                (cfg.atrMax <= 0.0 || r.atrPct <= cfg.atrMax) &&
+                (cfg.rangeMinRatio <= 0.0 || r.rangeRatio >= cfg.rangeMinRatio) &&
+                (!cfg.trendFilter || r.trendPct >= -cfg.trendTolPct) &&
+                (!cfg.upCandleOnly || r.changePct >= 0) &&
                 lastCandle[r.symbol] != r.candle &&
                 (now - (lastAlertAt[r.symbol] ?: 0L)) >= cfg.cooldownMin * 60_000L
         }
@@ -297,7 +309,7 @@ class VolumeService : Service() {
         ScanState.lastScan.value = now
         val stamp = clock.format(Date(now))
         ScanState.status.value = "Dernier scan à $stamp · ${hits.size} alerte(s)" +
-            (if (!btcOk) " · filtre Bitcoin actif" else "")
+            (if (!btcOk) " · bloqué : $btcReason" else "")
         updateForeground("${cands.size} cryptos surveillées · scan $stamp")
 
         if (hits.isNotEmpty()) {
@@ -323,12 +335,34 @@ class VolumeService : Service() {
         }
     }
 
-    /** Variation de Bitcoin sur environ 1 h (bougies de 15 min). */
-    private fun btcChange(): Double {
-        val arr = JSONArray(http("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=5"))
-        val first = arr.getJSONArray(0).getString(1).toDouble()
-        val last = arr.getJSONArray(arr.length() - 1).getString(4).toDouble()
-        return (last - first) / first * 100.0
+    /** État de Bitcoin (bougies de 15 min clôturées) : variation 1 h, tendance MA10/MA30, choc de volatilité. */
+    private fun btcInfo(): BtcInfo {
+        val arr = JSONArray(http("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=42"))
+        val n = arr.length() - 1                    // bougies clôturées : indices 0 .. n-1
+        if (n < 31) throw IOException("historique BTC insuffisant")
+        val close = DoubleArray(n)
+        val range = DoubleArray(n)
+        for (i in 0 until n) {
+            val k = arr.getJSONArray(i)
+            close[i] = k.getString(4).toDouble()
+            range[i] = (k.getString(2).toDouble() - k.getString(3).toDouble()) / close[i] * 100.0
+        }
+        val b = n - 1
+        val chg = (close[b] - close[b - 4]) / close[b - 4] * 100.0
+        var s30 = 0.0
+        var s10 = 0.0
+        for (j in b - 29..b) {
+            s30 += close[j]
+            if (j > b - 10) s10 += close[j]
+        }
+        s30 /= 30.0
+        s10 /= 10.0
+        val trend = (s10 - s30) / s30 * 100.0
+        var rs = 0.0
+        for (j in b - 20 until b) rs += range[j]
+        val avgR = rs / 20.0
+        val shock = if (avgR > 0.0) range[b] / avgR else 0.0
+        return BtcInfo(chg, trend, shock)
     }
 
     /** Une seule requête pour toutes les paires, puis filtres prix / volume / listes. */
@@ -343,10 +377,13 @@ class VolumeService : Service() {
             if (!sym.endsWith("USDT")) continue
             val base = sym.removeSuffix("USDT")
             total++
-            if (base in STABLE || base in cfg.excluded) continue
+            if (base in cfg.excluded) continue
             val price = t.optString("lastPrice").toDoubleOrNull() ?: continue
             val qv = t.optString("quoteVolume").toDoubleOrNull() ?: continue
             if (price <= 0.0 || qv <= 0.0) continue
+            val hi = t.optString("highPrice").toDoubleOrNull() ?: price
+            val lo = t.optString("lowPrice").toDoubleOrNull() ?: price
+            if (Stables.isStable(base, price, hi, lo)) continue
             val op = t.optString("openPrice").toDoubleOrNull() ?: price
             val chg = if (op > 0.0) (price - op) / op * 100.0 else 0.0
             if (base in cfg.favorites) {
@@ -395,9 +432,31 @@ class VolumeService : Service() {
         val high = last.getString(2).toDouble()
         val low = last.getString(3).toDouble()
         val wick = if (high > low) (high - maxOf(open, close)) / (high - low) * 100.0 else 0.0
+        // volatilité (ATR en %) et tendance (MA10 vs MA30) sur l'historique qui précède le signal
+        val kAtr = minOf(14, n)
+        var atrSum = 0.0
+        for (i in n - kAtr until n) {
+            val h = arr.getJSONArray(i)
+            val cl = h.getString(4).toDouble()
+            if (cl > 0.0) atrSum += (h.getString(2).toDouble() - h.getString(3).toDouble()) / cl * 100.0
+        }
+        val atr = atrSum / kAtr
+        val lastRange = if (close > 0.0) (high - low) / close * 100.0 else 0.0
+        val rangeRatio = if (atr > 0.0) lastRange / atr else 0.0
+        val kShort = minOf(10, n)
+        var sLong = 0.0
+        var sShort = 0.0
+        for (i in 0 until n) {
+            val cl = arr.getJSONArray(i).getString(4).toDouble()
+            sLong += cl
+            if (i >= n - kShort) sShort += cl
+        }
+        val maLong = sLong / n
+        val maShort = sShort / kShort
+        val trend = if (maLong > 0.0) (maShort - maLong) / maLong * 100.0 else 0.0
         return ScanRow(
             c.base, c.price, (close - open) / open * 100.0, qv / avg, qv,
-            last.getLong(0), wick, c.chg24
+            last.getLong(0), wick, c.chg24, atr, rangeRatio, trend
         )
     }
 }

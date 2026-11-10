@@ -163,6 +163,7 @@ fun ScannerTab(cfg: Config, update: (Config) -> Unit) {
     val rows by ScanState.rows.collectAsState()
     val monitored by ScanState.monitored.collectAsState()
     val total by ScanState.totalPairs.collectAsState()
+    val btc by ScanState.btc.collectAsState()
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -185,6 +186,7 @@ fun ScannerTab(cfg: Config, update: (Config) -> Unit) {
                         )
                     }
                     Muted(status)
+                    if (btc.isNotEmpty()) Muted(btc)
                     if (running && monitored > 0) {
                         Muted("$monitored cryptos surveillées sur $total paires USDT")
                     }
@@ -473,14 +475,53 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc
             NumField("Hausse 24 h maximale (%, 0 = désactivé)", cfg.max24hPct) {
                 update(cfg.copy(max24hPct = it))
             }
+        }
+
+        Section("Volatilité et tendance") {
+            NumField("Volatilité minimale (ATR en % du prix, 0 = désactivé)", cfg.atrMin) {
+                update(cfg.copy(atrMin = it))
+            }
+            NumField("Volatilité maximale (ATR %, 0 = désactivé)", cfg.atrMax) {
+                update(cfg.copy(atrMax = it))
+            }
+            NumField("Expansion de volatilité minimale (×, 0 = désactivé)", cfg.rangeMinRatio) {
+                update(cfg.copy(rangeMinRatio = it))
+            }
+            SwitchRow(
+                "Filtre de tendance",
+                "Écarte les cryptos en tendance baissière : moyenne des 10 dernières bougies sous celle des 30",
+                cfg.trendFilter
+            ) { update(cfg.copy(trendFilter = it)) }
+            if (cfg.trendFilter) {
+                NumField("Tolérance de baisse de la tendance (%)", cfg.trendTolPct) {
+                    update(cfg.copy(trendTolPct = it))
+                }
+            }
+            SwitchRow(
+                "Bougie haussière uniquement",
+                "Écarte les pics de volume accompagnés d'une baisse de prix",
+                cfg.upCandleOnly
+            ) { update(cfg.copy(upCandleOnly = it)) }
+        }
+
+        Section("Bitcoin : état du marché") {
+            Muted("Les nouvelles ne se mesurent pas directement, mais Bitcoin y réagit en quelques minutes : on s'en sert comme baromètre du climat de marché.")
             SwitchRow(
                 "Filtre Bitcoin",
-                "Aucune alerte si Bitcoin baisse trop sur environ 1 heure",
+                "Aucune alerte quand l'état de Bitcoin est défavorable",
                 cfg.btcFilter
             ) { update(cfg.copy(btcFilter = it)) }
             if (cfg.btcFilter) {
-                NumField("Baisse maximale de Bitcoin (%)", cfg.btcDropPct) {
+                NumField("Baisse maximale de BTC sur environ 1 h (%)", cfg.btcDropPct) {
                     update(cfg.copy(btcDropPct = it))
+                }
+                SwitchRow(
+                    "Exiger une tendance BTC non baissière",
+                    "Moyenne 10 bougies ≥ moyenne 30 (bougies de 15 min)",
+                    cfg.btcTrendFilter
+                ) { update(cfg.copy(btcTrendFilter = it)) }
+                NumField("Choc de volatilité BTC maximal (×, 0 = désactivé)", cfg.btcShockMax) {
+                    update(cfg.copy(btcShockMax = it))
                 }
             }
         }
