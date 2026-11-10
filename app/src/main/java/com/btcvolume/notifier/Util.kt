@@ -22,3 +22,8 @@ fun fmtRatio(r: Double): String = String.format(Locale.US, "×%.1f", r)
 fun fmtPct(p: Double): String = String.format(Locale.US, "%+.2f%%", p)
 
 fun fmtNum(v: Double): String = BigDecimal.valueOf(v).stripTrailingZeros().toPlainString()
+
+fun fmtUsd(v: Double): String = String.format(Locale.US, "%+.2f USDT", v)
+
+fun fmtQty(q: Double): String =
+    BigDecimal(q).round(java.math.MathContext(6)).stripTrailingZeros().toPlainString()

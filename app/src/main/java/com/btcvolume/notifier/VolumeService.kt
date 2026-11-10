@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -71,6 +72,7 @@ class VolumeService : Service() {
     override fun onCreate() {
         super.onCreate()
         History.load(this)
+        Positions.load(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -139,7 +141,9 @@ class VolumeService : Service() {
 
     private fun notifyHits(hits: List<ScanRow>, cfg: Config) {
         val nm = getSystemService(NotificationManager::class.java)
-        if (cfg.notifMode == "SUMMARY") {
+        val tc = TradePrefs.load(this)
+        val semi = tc.enabled && tc.trigger == "SEMI"
+        if (cfg.notifMode == "SUMMARY" && !semi) {
             val style = Notification.InboxStyle()
             for (h in hits.take(5)) {
                 style.addLine("${h.symbol}  ${fmtRatio(h.ratio)}  ${fmtPrice(h.price)}  ${fmtPct(h.changePct)}")
@@ -156,18 +160,52 @@ class VolumeService : Service() {
                 .build()
             nm.notify(alertId++, n)
         } else {
-            for (h in hits.take(10)) {
+            // En mode semi-automatique : une notification par crypto, avec bouton « Acheter ».
+            for (h in hits.take(if (semi) 5 else 10)) {
                 val arrow = if (h.changePct >= 0) "▲" else "▼"
                 val text = "Prix ${fmtPrice(h.price)} $arrow ${fmtPct(h.changePct)} · Vol ${fmtVol(h.volUsdt)} USDT"
-                val n = Notification.Builder(this, CH_ALERT)
+                val id = alertId++
+                val b = Notification.Builder(this, CH_ALERT)
                     .setContentTitle("📈 ${h.symbol} ${fmtRatio(h.ratio)} volume")
                     .setContentText(text)
                     .setSmallIcon(android.R.drawable.ic_dialog_alert)
                     .setContentIntent(contentIntent())
                     .setAutoCancel(true)
-                    .build()
-                nm.notify(alertId++, n)
+                if (semi) {
+                    val buy = Intent(this, TradeActionReceiver::class.java)
+                        .setAction("com.btcvolume.notifier.BUY")
+                        .putExtra("symbol", h.symbol)
+                        .putExtra("nid", id)
+                    val pi = PendingIntent.getBroadcast(
+                        this, id, buy, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    )
+                    b.addAction(
+                        Notification.Action.Builder(
+                            Icon.createWithResource(this, android.R.drawable.ic_menu_add),
+                            "Acheter ${fmtNum(tc.amountUsdt)} USDT", pi
+                        ).build()
+                    )
+                }
+                nm.notify(id, b.build())
             }
+        }
+    }
+
+    /** Achat automatique des alertes qui respectent la stratégie et les protections. */
+    private fun autoTrade(hits: List<ScanRow>) {
+        val tc = TradePrefs.load(this)
+        if (!tc.enabled || tc.trigger != "AUTO") return
+        if (tc.env == "REAL" && !tc.realAutoOk) {
+            Notifier.post(this, "Trading auto bloqué", "Mode réel : autorisez l'automatique dans Trade > Stratégie.")
+            return
+        }
+        Positions.load(this)
+        for (h in hits) {
+            if (h.ratio < tc.autoMinRatio) continue
+            if (tc.buyOnlyUp && h.changePct < 0) continue
+            if (Positions.items.value.any { it.symbol == h.symbol && it.mode == tc.env && it.status == "OPEN" }) continue
+            val r = Trader.buy(this, h.symbol, "AUTO")
+            if (r.blocked) break
         }
     }
 
@@ -176,6 +214,7 @@ class VolumeService : Service() {
     private fun loop() {
         val clock = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         var lastKey = ""
+        var lastSync = 0L
         while (running) {
             var pause = 5_000L
             try {
@@ -195,6 +234,15 @@ class VolumeService : Service() {
             } catch (e: Exception) {
                 ScanState.status.value = "Erreur : ${e.message}"
                 pause = 30_000L
+            }
+            try {
+                val nowMs = System.currentTimeMillis()
+                if (nowMs - lastSync >= 20_000L && Positions.items.value.any { it.status == "OPEN" }) {
+                    lastSync = nowMs
+                    Trader.syncAll(this)
+                }
+            } catch (e: Exception) {
+                // la synchronisation des positions réessaiera au prochain cycle
             }
             try {
                 Thread.sleep(pause)
@@ -238,6 +286,7 @@ class VolumeService : Service() {
         if (hits.isNotEmpty()) {
             History.add(this, hits.map { AlertItem(now, it.symbol, it.price, it.changePct, it.ratio, it.volUsdt) })
             notifyHits(hits, cfg)
+            autoTrade(hits)
         }
     }
 

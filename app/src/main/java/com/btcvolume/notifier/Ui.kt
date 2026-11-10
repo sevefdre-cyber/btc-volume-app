@@ -68,13 +68,18 @@ fun MainScreen() {
         Prefs.save(ctx, it)
     }
     var tab by remember { mutableStateOf(0) }
+    var tc by remember { mutableStateOf(TradePrefs.load(ctx)) }
+    val updateTc: (TradeConfig) -> Unit = {
+        tc = it
+        TradePrefs.save(ctx, it)
+    }
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33) permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    val tabs = listOf("📊" to "Scanner", "🔔" to "Alertes", "⭐" to "Listes", "⚙️" to "Réglages")
+    val tabs = listOf("📊" to "Scanner", "🔔" to "Alertes", "💹" to "Trade", "⭐" to "Listes", "⚙️" to "Réglages")
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -95,8 +100,9 @@ fun MainScreen() {
             when (tab) {
                 0 -> ScannerTab(cfg, update)
                 1 -> AlertsTab()
-                2 -> ListsTab(cfg, update)
-                else -> SettingsTab(cfg, update)
+                2 -> TradeTab(tc, updateTc)
+                3 -> ListsTab(cfg, update)
+                else -> SettingsTab(cfg, update, tc, updateTc)
             }
         }
     }
@@ -425,7 +431,7 @@ fun SwitchRow(title: String, sub: String, checked: Boolean, onChange: (Boolean) 
 }
 
 @Composable
-fun SettingsTab(cfg: Config, update: (Config) -> Unit) {
+fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (TradeConfig) -> Unit) {
     val ctx = LocalContext.current
     Column(
         Modifier
@@ -497,6 +503,8 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit) {
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Désactiver l'optimisation batterie") }
         }
+
+        ApiSection(tc, updateTc)
 
         Muted("Les alertes sont des signaux d'information, pas des conseils d'investissement.")
     }

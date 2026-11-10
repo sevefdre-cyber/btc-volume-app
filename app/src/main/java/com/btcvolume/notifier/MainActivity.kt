@@ -8,6 +8,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         History.load(this)
+        Positions.load(this)
         setContent {
             AppTheme {
                 MainScreen()

@@ -12,7 +12,7 @@
         android:label="Volume Scanner"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:theme="@style/Theme.App">
 
         <activity
@@ -29,6 +29,10 @@
             android:name=".VolumeService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".TradeActionReceiver"
+            android:exported="false" />
 
         <receiver
             android:name=".BootReceiver"
