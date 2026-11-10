@@ -25,7 +25,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 
-private class Cand(val symbol: String, val base: String, val price: Double, val qv24: Double)
+private class Cand(val symbol: String, val base: String, val price: Double, val qv24: Double, val chg24: Double)
 
 class VolumeService : Service() {
 
@@ -176,6 +176,11 @@ class VolumeService : Service() {
                         .setAction("com.btcvolume.notifier.BUY")
                         .putExtra("symbol", h.symbol)
                         .putExtra("nid", id)
+                        .putExtra("price", h.price)
+                        .putExtra("ratio", h.ratio)
+                        .putExtra("change", h.changePct)
+                        .putExtra("wick", h.wickPct)
+                        .putExtra("chg24", h.chg24)
                     val pi = PendingIntent.getBroadcast(
                         this, id, buy, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                     )
@@ -204,7 +209,7 @@ class VolumeService : Service() {
             if (h.ratio < tc.autoMinRatio) continue
             if (tc.buyOnlyUp && h.changePct < 0) continue
             if (Positions.items.value.any { it.symbol == h.symbol && it.mode == tc.env && it.status == "OPEN" }) continue
-            val r = Trader.buy(this, h.symbol, "AUTO")
+            val r = Trader.buy(this, h.symbol, "AUTO", Signal(h.price, h.ratio, h.changePct, h.wickPct, h.chg24))
             if (r.blocked) break
         }
     }
@@ -264,9 +269,19 @@ class VolumeService : Service() {
         val now = System.currentTimeMillis()
         val sorted = rows.sortedByDescending { it.ratio }
         val threshold = if (cfg.volThreshold < 1.05) 1.05 else cfg.volThreshold
-        val hits = sorted.filter { r ->
+        var btcOk = true
+        if (cfg.btcFilter) {
+            try {
+                btcOk = btcChange() >= -cfg.btcDropPct
+            } catch (e: Exception) {
+                btcOk = true   // si Bitcoin est inaccessible, on ne bloque pas
+            }
+        }
+        val hits = if (!btcOk) emptyList() else sorted.filter { r ->
             r.ratio >= threshold &&
                 (cfg.mode == "VOLUME" || abs(r.changePct) >= cfg.priceThreshold) &&
+                r.wickPct <= cfg.maxWickPct &&
+                (cfg.max24hPct <= 0.0 || r.chg24 <= cfg.max24hPct) &&
                 lastCandle[r.symbol] != r.candle &&
                 (now - (lastAlertAt[r.symbol] ?: 0L)) >= cfg.cooldownMin * 60_000L
         }
@@ -280,7 +295,8 @@ class VolumeService : Service() {
         ScanState.totalPairs.value = total
         ScanState.lastScan.value = now
         val stamp = clock.format(Date(now))
-        ScanState.status.value = "Dernier scan à $stamp · ${hits.size} alerte(s)"
+        ScanState.status.value = "Dernier scan à $stamp · ${hits.size} alerte(s)" +
+            (if (!btcOk) " · filtre Bitcoin actif" else "")
         updateForeground("${cands.size} cryptos surveillées · scan $stamp")
 
         if (hits.isNotEmpty()) {
@@ -306,6 +322,14 @@ class VolumeService : Service() {
         }
     }
 
+    /** Variation de Bitcoin sur environ 1 h (bougies de 15 min). */
+    private fun btcChange(): Double {
+        val arr = JSONArray(http("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=5"))
+        val first = arr.getJSONArray(0).getString(1).toDouble()
+        val last = arr.getJSONArray(arr.length() - 1).getString(4).toDouble()
+        return (last - first) / first * 100.0
+    }
+
     /** Une seule requête pour toutes les paires, puis filtres prix / volume / listes. */
     private fun candidates(cfg: Config): Pair<List<Cand>, Int> {
         val arr = JSONArray(http("https://api.binance.com/api/v3/ticker/24hr?type=MINI"))
@@ -322,10 +346,12 @@ class VolumeService : Service() {
             val price = t.optString("lastPrice").toDoubleOrNull() ?: continue
             val qv = t.optString("quoteVolume").toDoubleOrNull() ?: continue
             if (price <= 0.0 || qv <= 0.0) continue
+            val op = t.optString("openPrice").toDoubleOrNull() ?: price
+            val chg = if (op > 0.0) (price - op) / op * 100.0 else 0.0
             if (base in cfg.favorites) {
-                favs.add(Cand(sym, base, price, qv))
+                favs.add(Cand(sym, base, price, qv, chg))
             } else if (price >= cfg.priceMin && price <= cfg.priceMax && qv >= cfg.minVol24h) {
-                others.add(Cand(sym, base, price, qv))
+                others.add(Cand(sym, base, price, qv, chg))
             }
         }
         others.sortByDescending { it.qv24 }
@@ -365,6 +391,12 @@ class VolumeService : Service() {
         for (i in 0 until n) sum += arr.getJSONArray(i).getString(7).toDouble()
         val avg = sum / n
         if (avg <= 0.0 || open <= 0.0) return null
-        return ScanRow(c.base, c.price, (close - open) / open * 100.0, qv / avg, qv, last.getLong(0))
+        val high = last.getString(2).toDouble()
+        val low = last.getString(3).toDouble()
+        val wick = if (high > low) (high - maxOf(open, close)) / (high - low) * 100.0 else 0.0
+        return ScanRow(
+            c.base, c.price, (close - open) / open * 100.0, qv / avg, qv,
+            last.getLong(0), wick, c.chg24
+        )
     }
 }

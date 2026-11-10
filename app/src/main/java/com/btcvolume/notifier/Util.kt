@@ -27,3 +27,5 @@ fun fmtUsd(v: Double): String = String.format(Locale.US, "%+.2f USDT", v)
 
 fun fmtQty(q: Double): String =
     BigDecimal(q).round(java.math.MathContext(6)).stripTrailingZeros().toPlainString()
+
+fun fmtPf(d: Double): String = if (d.isInfinite()) "∞" else String.format(Locale.US, "%.2f", d)

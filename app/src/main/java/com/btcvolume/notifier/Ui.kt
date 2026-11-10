@@ -100,7 +100,7 @@ fun MainScreen() {
             when (tab) {
                 0 -> ScannerTab(cfg, update)
                 1 -> AlertsTab()
-                2 -> TradeTab(tc, updateTc)
+                2 -> TradeTab(cfg, tc, updateTc)
                 3 -> ListsTab(cfg, update)
                 else -> SettingsTab(cfg, update, tc, updateTc)
             }
@@ -462,6 +462,22 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc
             }
             NumField("Délai de repos par crypto (minutes)", cfg.cooldownMin.toDouble()) {
                 update(cfg.copy(cooldownMin = it.toInt().coerceAtLeast(0)))
+            }
+            NumField("Mèche haute maximale (% de la bougie, 100 = désactivé)", cfg.maxWickPct) {
+                update(cfg.copy(maxWickPct = it))
+            }
+            NumField("Hausse 24 h maximale (%, 0 = désactivé)", cfg.max24hPct) {
+                update(cfg.copy(max24hPct = it))
+            }
+            SwitchRow(
+                "Filtre Bitcoin",
+                "Aucune alerte si Bitcoin baisse trop sur environ 1 heure",
+                cfg.btcFilter
+            ) { update(cfg.copy(btcFilter = it)) }
+            if (cfg.btcFilter) {
+                NumField("Baisse maximale de Bitcoin (%)", cfg.btcDropPct) {
+                    update(cfg.copy(btcDropPct = it))
+                }
             }
         }
 

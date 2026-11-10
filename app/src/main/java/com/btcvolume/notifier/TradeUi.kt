@@ -169,7 +169,7 @@ fun PositionCard(p: Position, price: Double?, onClose: (() -> Unit)?) {
 // ---------------------------------------------------------------- onglet Trade
 
 @Composable
-fun TradeTab(tc: TradeConfig, updateTc: (TradeConfig) -> Unit) {
+fun TradeTab(cfg: Config, tc: TradeConfig, updateTc: (TradeConfig) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf<String?>(null) }
@@ -339,6 +339,9 @@ fun TradeTab(tc: TradeConfig, updateTc: (TradeConfig) -> Unit) {
                             updateTc(tc.copy(maxPositions = it.toInt().coerceAtLeast(0)))
                         }
                         NumField("Limite de perte par jour (USDT)", tc.dailyLossLimit) { updateTc(tc.copy(dailyLossLimit = it)) }
+                        if (tc.env == "SIM") {
+                            NumField("Glissement simulé (%)", tc.simSlippagePct) { updateTc(tc.copy(simSlippagePct = it)) }
+                        }
                         if (tc.trigger == "AUTO") {
                             NumField("Ratio de volume minimum pour acheter (×)", tc.autoMinRatio) {
                                 updateTc(tc.copy(autoMinRatio = it))
@@ -361,6 +364,9 @@ fun TradeTab(tc: TradeConfig, updateTc: (TradeConfig) -> Unit) {
                 }
             }
         }
+
+        item { JournalCard(closedList, tc) }
+        item { BacktestCard(cfg, tc) }
 
         item { Text("Jetons sélectionnés par les alertes", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) }
         item {
@@ -670,5 +676,153 @@ fun ApiSection(tc: TradeConfig, updateTc: (TradeConfig) -> Unit) {
             }
         )
         if (tc.env != "SIM") KeyEditor(tc.env)
+    }
+}
+
+// ---------------------------------------------------------------- Journal & statistiques
+
+@Composable
+fun BucketBlock(title: String, rows: List<Bucket>) {
+    if (rows.isEmpty()) return
+    Text(title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+    for (b in rows) {
+        Muted("${b.label} : ${b.n} trade(s) · ${b.winPct} % gagnants · moyenne ${fmtUsd(b.avgPnl)}")
+    }
+}
+
+@Composable
+fun JournalCard(closed: List<Position>, tc: TradeConfig) {
+    val ctx = LocalContext.current
+    var open by remember { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf(false) }
+    val st = Journal.stats(closed)
+
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Réinitialiser le journal ?") },
+            text = {
+                Text("Supprime les opérations clôturées du mode ${envLabel(tc.env)} (statistiques et profit total). Les positions ouvertes sont conservées.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirm = false
+                    Positions.clearClosed(ctx, tc.env)
+                }) { Text("Réinitialiser", color = DownColor) }
+            },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Annuler") } }
+        )
+    }
+
+    AppCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { open = !open },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("📈 Journal & statistiques", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                Text(if (open) "▴" else "▾", fontSize = 18.sp)
+            }
+            if (open) {
+                if (st == null) {
+                    Muted("Pas encore d'opération clôturée dans ce mode.")
+                } else {
+                    Muted("${st.n} trades · réussite ${st.wins * 100 / st.n} % · espérance ${fmtUsd(st.expectancy)} par trade")
+                    Muted("Gain moyen ${fmtUsd(st.avgWin)} · perte moyenne ${fmtUsd(st.avgLoss)} · facteur de profit ${fmtPf(st.profitFactor)}")
+                    Muted("Repli maximal ${fmtUsd(-st.maxDd)} · glissement moyen à l'entrée ${fmtPct(st.avgSlip)}")
+                    BucketBlock("Par ratio de volume", Journal.buckets(closed, { it.sigRatio }, listOf(5.0, 10.0), "×"))
+                    BucketBlock("Par mèche haute de la bougie", Journal.buckets(closed, { it.sigWick }, listOf(20.0, 40.0), " %"))
+                    BucketBlock("Par hausse sur 24 h", Journal.buckets(closed, { it.sigChg24 }, listOf(10.0, 30.0), " %"))
+                    BucketBlock("Par variation de la bougie", Journal.buckets(closed, { it.sigChange }, listOf(2.0, 5.0), " %"))
+                    BucketBlock("Par type de sortie", Journal.byReason(closed))
+                }
+                Muted("Les tranches ne comptent que les achats issus d'une alerte (automatique ou semi-auto). Avec moins de 30 trades, les chiffres restent peu fiables.")
+                OutlinedButton(onClick = { confirm = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Réinitialiser le journal")
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Backtest
+
+@Composable
+fun BtLine(label: String, r: BtResult) {
+    Text(label, fontWeight = FontWeight.SemiBold)
+    if (r.n == 0) {
+        Muted("Aucun signal sur la période avec ces réglages.")
+    } else {
+        Text(
+            "${r.n} trades · réussite ${r.wins * 100 / r.n} % · total ${fmtPct(r.totalPct)} · ${fmtPct(r.avgPct)} par trade",
+            color = pnlColor(r.totalPct), fontSize = 13.sp
+        )
+        Muted("Gain moyen ${fmtPct(r.avgWinPct)} · perte moyenne ${fmtPct(r.avgLossPct)} · facteur de profit ${fmtPf(r.profitFactor)} · repli max ${fmtPct(-r.maxDdPct)}")
+    }
+}
+
+@Composable
+fun BacktestCard(cfg: Config, tc: TradeConfig) {
+    val scope = rememberCoroutineScope()
+    var open by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+    var result by remember { mutableStateOf<Pair<BtResult, BtResult>?>(null) }
+    var count by remember { mutableStateOf(60.0) }
+    var trail by remember { mutableStateOf(2.0) }
+    var hold by remember { mutableStateOf(48.0) }
+
+    AppCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { open = !open },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🧪 Backtest", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                Text(if (open) "▴" else "▾", fontSize = 18.sp)
+            }
+            if (open) {
+                Muted("Rejoue vos règles (filtres de scan, TP, SL, glissement) sur l'historique récent des cryptos les plus échangées de votre sélection, et compare un TP fixe à un stop suiveur. L'historique est court (environ 3 jours en bougies de 5 min) : avec peu de trades, le résultat est peu fiable.")
+                NumField("Nombre de cryptos testées", count) { count = it }
+                NumField("Stop suiveur (%) activé après le TP", trail) { trail = it }
+                NumField("Durée maximale d'un trade (bougies)", hold) { hold = it }
+                Button(
+                    onClick = {
+                        busy = true
+                        result = null
+                        scope.launch {
+                            try {
+                                val r = withContext(Dispatchers.IO) {
+                                    Backtester.run(
+                                        cfg, tc, count.toInt().coerceIn(5, 200), trail, hold.toInt(),
+                                        { status = it }
+                                    )
+                                }
+                                result = r
+                                status = "Terminé."
+                            } catch (e: Exception) {
+                                status = "Échec : ${e.message}"
+                            }
+                            busy = false
+                        }
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (busy) "Calcul en cours…" else "Lancer le backtest") }
+                if (status.isNotEmpty()) Muted(status)
+                val r = result
+                if (r != null) {
+                    BtLine("A · TP fixe +${fmtNum(tc.tpPct)} % / SL −${fmtNum(tc.slPct)} %", r.first)
+                    BtLine("B · Stop suiveur ${fmtNum(trail)} % après le TP", r.second)
+                    Muted("Hypothèses : signal à la clôture de la bougie, entrée à l'ouverture suivante, frais 0,2 % aller-retour, glissement ${fmtNum(tc.simSlippagePct)} %, SL supposé touché avant le TP dans une même bougie. Limite de positions, filtre Bitcoin et profondeur du carnet d'ordres non simulés.")
+                }
+            }
+        }
     }
 }

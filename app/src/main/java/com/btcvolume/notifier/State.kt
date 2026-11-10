@@ -12,7 +12,9 @@ data class ScanRow(
     val changePct: Double,   // variation de la dernière bougie clôturée
     val ratio: Double,       // volume de la bougie / moyenne
     val volUsdt: Double,     // volume de la bougie en USDT
-    val candle: Long         // heure d'ouverture de la bougie
+    val candle: Long,        // heure d'ouverture de la bougie
+    val wickPct: Double = 0.0,   // mèche haute en % de la bougie
+    val chg24: Double = 0.0      // variation sur 24 h en %
 )
 
 data class AlertItem(

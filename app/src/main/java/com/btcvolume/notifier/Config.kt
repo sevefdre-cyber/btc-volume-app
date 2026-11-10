@@ -16,6 +16,10 @@ data class Config(
     val maxSymbols: Int = 300,
     val autoStart: Boolean = false,
     val wakeLock: Boolean = true,
+    val maxWickPct: Double = 40.0,          // mèche haute max (% de la bougie), 100 = désactivé
+    val max24hPct: Double = 50.0,           // hausse 24h max (%), 0 = désactivé
+    val btcFilter: Boolean = false,
+    val btcDropPct: Double = 1.0,           // baisse BTC (~1 h) au-delà de laquelle on bloque
     val favorites: Set<String> = emptySet(),
     val excluded: Set<String> = emptySet()
 )
@@ -43,6 +47,10 @@ object Prefs {
             maxSymbols = p.getInt("maxSymbols", d.maxSymbols),
             autoStart = p.getBoolean("autoStart", d.autoStart),
             wakeLock = p.getBoolean("wakeLock", d.wakeLock),
+            maxWickPct = p.dbl("maxWickPct", d.maxWickPct),
+            max24hPct = p.dbl("max24hPct", d.max24hPct),
+            btcFilter = p.getBoolean("btcFilter", d.btcFilter),
+            btcDropPct = p.dbl("btcDropPct", d.btcDropPct),
             favorites = (p.getStringSet("favorites", emptySet()) ?: emptySet()).toSet(),
             excluded = (p.getStringSet("excluded", emptySet()) ?: emptySet()).toSet()
         )
@@ -62,6 +70,10 @@ object Prefs {
             .putInt("maxSymbols", cfg.maxSymbols)
             .putBoolean("autoStart", cfg.autoStart)
             .putBoolean("wakeLock", cfg.wakeLock)
+            .putString("maxWickPct", cfg.maxWickPct.toString())
+            .putString("max24hPct", cfg.max24hPct.toString())
+            .putBoolean("btcFilter", cfg.btcFilter)
+            .putString("btcDropPct", cfg.btcDropPct.toString())
             .putStringSet("favorites", HashSet(cfg.favorites))
             .putStringSet("excluded", HashSet(cfg.excluded))
             .apply()

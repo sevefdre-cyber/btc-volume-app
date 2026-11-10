@@ -18,7 +18,8 @@ data class TradeConfig(
     val dailyLossLimit: Double = 20.0,   // USDT, obligatoire (> 0)
     val autoMinRatio: Double = 5.0,
     val buyOnlyUp: Boolean = true,
-    val realAutoOk: Boolean = false
+    val realAutoOk: Boolean = false,
+    val simSlippagePct: Double = 0.3     // glissement simulé en mode Simulation
 )
 
 private fun SharedPreferences.dbl(key: String, def: Double): Double =
@@ -42,7 +43,8 @@ object TradePrefs {
             dailyLossLimit = p.dbl("dailyLossLimit", d.dailyLossLimit),
             autoMinRatio = p.dbl("autoMinRatio", d.autoMinRatio),
             buyOnlyUp = p.getBoolean("buyOnlyUp", d.buyOnlyUp),
-            realAutoOk = p.getBoolean("realAutoOk", d.realAutoOk)
+            realAutoOk = p.getBoolean("realAutoOk", d.realAutoOk),
+            simSlippagePct = p.dbl("simSlippagePct", d.simSlippagePct)
         )
     }
 
@@ -59,6 +61,7 @@ object TradePrefs {
             .putString("autoMinRatio", t.autoMinRatio.toString())
             .putBoolean("buyOnlyUp", t.buyOnlyUp)
             .putBoolean("realAutoOk", t.realAutoOk)
+            .putString("simSlippagePct", t.simSlippagePct.toString())
             .apply()
     }
 }
@@ -78,7 +81,12 @@ data class Position(
     val pnl: Double,           // résultat estimé en USDT
     val closeReason: String,
     val openTime: Long,
-    val closeTime: Long
+    val closeTime: Long,
+    val sigRatio: Double = 0.0,     // caractéristiques du signal à l'achat (journal)
+    val sigChange: Double = 0.0,
+    val sigWick: Double = 0.0,
+    val sigChg24: Double = 0.0,
+    val slippagePct: Double = 0.0   // écart entre le prix du signal et le prix d'exécution
 )
 
 object Positions {
@@ -104,7 +112,12 @@ object Positions {
                         o.getDouble("entry"), o.getDouble("qty"), o.getDouble("cost"),
                         o.getDouble("tp"), o.getDouble("sl"), o.getLong("listId"),
                         o.getString("status"), o.getDouble("exit"), o.getDouble("pnl"),
-                        o.getString("reason"), o.getLong("openTime"), o.getLong("closeTime")
+                        o.getString("reason"), o.getLong("openTime"), o.getLong("closeTime"),
+                        sigRatio = o.optDouble("sigRatio", 0.0),
+                        sigChange = o.optDouble("sigChange", 0.0),
+                        sigWick = o.optDouble("sigWick", 0.0),
+                        sigChg24 = o.optDouble("sigChg24", 0.0),
+                        slippagePct = o.optDouble("slippagePct", 0.0)
                     )
                 )
             }
@@ -131,6 +144,14 @@ object Positions {
         save(c, out)
     }
 
+    @Synchronized
+    fun clearClosed(c: Context, env: String) {
+        load(c)
+        val out = _items.value.filter { !(it.mode == env && it.status == "CLOSED") }
+        _items.value = out
+        save(c, out)
+    }
+
     private fun save(c: Context, list: List<Position>) {
         val arr = JSONArray()
         for (p in list) {
@@ -142,6 +163,9 @@ object Positions {
                     .put("status", p.status).put("exit", p.exitPrice).put("pnl", p.pnl)
                     .put("reason", p.closeReason).put("openTime", p.openTime)
                     .put("closeTime", p.closeTime)
+                    .put("sigRatio", p.sigRatio).put("sigChange", p.sigChange)
+                    .put("sigWick", p.sigWick).put("sigChg24", p.sigChg24)
+                    .put("slippagePct", p.slippagePct)
             )
         }
         c.getSharedPreferences("positions", Context.MODE_PRIVATE)

@@ -14,6 +14,8 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.Calendar
 
+data class Signal(val price: Double, val ratio: Double, val change: Double, val wick: Double, val chg24: Double)
+
 class TradeResult(val ok: Boolean, val message: String, val blocked: Boolean = false)
 
 fun envLabel(env: String): String = when (env) {
@@ -57,7 +59,14 @@ class TradeActionReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             try {
-                val r = Trader.buy(app, symbol, "SEMI")
+                val sig = if (intent.hasExtra("ratio")) {
+                    Signal(
+                        intent.getDoubleExtra("price", 0.0), intent.getDoubleExtra("ratio", 0.0),
+                        intent.getDoubleExtra("change", 0.0), intent.getDoubleExtra("wick", 0.0),
+                        intent.getDoubleExtra("chg24", 0.0)
+                    )
+                } else null
+                val r = Trader.buy(app, symbol, "SEMI", sig)
                 if (nid >= 0) app.getSystemService(NotificationManager::class.java).cancel(nid)
                 if (r.blocked) Notifier.post(app, "⚠️ Achat $symbol non effectué", r.message)
             } finally {
@@ -101,14 +110,15 @@ object Trader {
     // ------------------------------------------------------------ achat
 
     @Synchronized
-    fun buy(c: Context, base: String, source: String): TradeResult {
+    fun buy(c: Context, base: String, source: String, sig: Signal? = null): TradeResult {
         Positions.load(c)
         val tc = TradePrefs.load(c)
         val block = check(tc)
         if (block != null) return TradeResult(false, block, true)
         val pair = base + "USDT"
         return try {
-            val p = if (tc.env == "SIM") buySim(c, tc, base, pair) else buyLive(c, tc, base, pair)
+            val p0 = if (tc.env == "SIM") buySim(c, tc, base, pair) else buyLive(c, tc, base, pair)
+            val p = if (sig != null) tag(c, p0, sig) else p0
             val msg = "Achat $base à ${fmtPrice(p.entryPrice)} · TP ${fmtPrice(p.tp)} · SL ${fmtPrice(p.sl)} (${envLabel(tc.env)})"
             if (source != "MANUAL") Notifier.post(c, "✅ Achat $base", msg)
             TradeResult(true, msg)
@@ -119,8 +129,19 @@ object Trader {
         }
     }
 
+    /** Enregistre les caractéristiques du signal pour le journal. */
+    private fun tag(c: Context, p: Position, sig: Signal): Position {
+        val slip = if (sig.price > 0) (p.entryPrice - sig.price) / sig.price * 100.0 else 0.0
+        val q = p.copy(
+            sigRatio = sig.ratio, sigChange = sig.change, sigWick = sig.wick,
+            sigChg24 = sig.chg24, slippagePct = slip
+        )
+        Positions.upsert(c, q)
+        return q
+    }
+
     private fun buySim(c: Context, tc: TradeConfig, base: String, pair: String): Position {
-        val price = Binance.price(pair)
+        val price = Binance.price(pair) * (1 + tc.simSlippagePct / 100.0)
         val now = System.currentTimeMillis()
         val p = Position(
             id = now, symbol = base, mode = "SIM", entryPrice = price,
@@ -290,7 +311,7 @@ object Trader {
         val pair = p.symbol + "USDT"
         return try {
             if (p.mode == "SIM") {
-                val price = Binance.price(pair)
+                val price = Binance.price(pair) * (1 - TradePrefs.load(c).simSlippagePct / 100.0)
                 val q = finish(c, p, price, p.qty * price * SIM_FEE, reason)
                 TradeResult(true, "${p.symbol} clôturé : ${fmtUsd(q.pnl)}")
             } else {
@@ -346,11 +367,11 @@ object Trader {
 
     // ------------------------------------------------------------ synchronisation
 
-    private fun syncSim(c: Context, p: Position, prices: Map<String, Double>): Position? {
+    private fun syncSim(c: Context, p: Position, prices: Map<String, Double>, slip: Double): Position? {
         val price = prices[p.symbol + "USDT"] ?: return null
         return when {
             price >= p.tp -> finish(c, p, p.tp, p.qty * p.tp * SIM_FEE, "TP")
-            price <= p.sl -> finish(c, p, p.sl, p.qty * p.sl * SIM_FEE, "SL")
+            price <= p.sl -> finish(c, p, p.sl * (1 - slip), p.qty * p.sl * (1 - slip) * SIM_FEE, "SL")
             else -> null
         }
     }
@@ -410,13 +431,14 @@ object Trader {
         Positions.load(c)
         val open = Positions.items.value.filter { it.status == "OPEN" }
         if (open.isEmpty()) return
+        val slip = TradePrefs.load(c).simSlippagePct / 100.0
         var prices: Map<String, Double>? = null
         for (p in open) {
             try {
                 var closed: Position? = null
                 if (p.mode == "SIM") {
                     val pr = prices ?: Binance.allPrices().also { prices = it }
-                    closed = syncSim(c, p, pr)
+                    closed = syncSim(c, p, pr, slip)
                 } else if (syncLive(c, p)) {
                     closed = Positions.get(c, p.id)
                 }
