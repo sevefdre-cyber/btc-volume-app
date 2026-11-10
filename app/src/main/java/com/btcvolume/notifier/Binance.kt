@@ -174,11 +174,32 @@ object Binance {
         return m
     }
 
-    fun candles(pair: String, interval: String, limit: Int): List<Candle> {
+    /** Jusqu'à pages x 1000 bougies (les plus récentes en dernier). */
+    fun candlesPaged(pair: String, interval: String, pages: Int): List<Candle> {
+        var all = candles(pair, interval, 1000)
+        for (p in 1 until pages) {
+            if (all.isEmpty()) break
+            val older = candles(pair, interval, 1000, all.first().time - 1)
+            if (older.isEmpty()) break
+            all = older + all
+        }
+        return all
+    }
+
+    private fun klineParams(pair: String, interval: String, limit: Int, endTime: Long?): Map<String, String> {
+        val m = LinkedHashMap<String, String>()
+        m["symbol"] = pair
+        m["interval"] = interval
+        m["limit"] = limit.toString()
+        if (endTime != null) m["endTime"] = endTime.toString()
+        return m
+    }
+
+    fun candles(pair: String, interval: String, limit: Int, endTime: Long? = null): List<Candle> {
         val arr = JSONArray(
             publicGet(
                 "REAL", "/api/v3/klines",
-                mapOf("symbol" to pair, "interval" to interval, "limit" to limit.toString())
+                klineParams(pair, interval, limit, endTime)
             )
         )
         val out = ArrayList<Candle>()

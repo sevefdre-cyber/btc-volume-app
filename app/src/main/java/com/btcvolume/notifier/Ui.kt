@@ -456,6 +456,9 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc
                 update(cfg.copy(volMax = it))
             }
             Muted("Intervalle de volume : sous le minimum le signal est trop faible, au-dessus du maximum le mouvement est probablement déjà trop avancé.")
+            NumField("Explosion de prix : hausse minimale de la bougie (%, 0 = désactivé)", cfg.explosionMin) {
+                update(cfg.copy(explosionMin = it))
+            }
             Text("Type d'alerte")
             ChoiceRow(
                 listOf("VOLUME" to "Volume seul", "VOLUME_PRICE" to "Volume + prix"),

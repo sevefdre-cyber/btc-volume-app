@@ -107,7 +107,8 @@ class SweepRow(
     val trend: Boolean,
     val btc: Boolean,
     val train: BtResult,
-    val valid: BtResult
+    val valid: BtResult,
+    val minChg: Double = 0.0     // explosion de prix : hausse minimale de la bougie (%)
 )
 
 object Backtester {
@@ -299,6 +300,7 @@ object Backtester {
             val ratio = f.ratio[i]
             if (ratio >= minR && (maxR <= 0.0 || ratio <= maxR) && i > blockedUntil &&
                 (cfg.mode == "VOLUME" || abs(f.change[i]) >= cfg.priceThreshold) &&
+                (cfg.explosionMin <= 0.0 || f.change[i] >= cfg.explosionMin) &&
                 f.wick[i] <= cfg.maxWickPct &&
                 (cfg.max24hPct <= 0.0 || f.chg24[i] <= cfg.max24hPct) &&
                 (cfg.atrMin <= 0.0 || f.atr[i] >= cfg.atrMin) &&
@@ -353,7 +355,7 @@ object Backtester {
         )
     }
 
-    private fun load(bases: List<String>, interval: String): List<Series> {
+    private fun load(bases: List<String>, interval: String, pages: Int = 1): List<Series> {
         val ms = VolumeService.intervalMs(interval)
         val btc = btcGrid()
         val pool = Executors.newFixedThreadPool(6)
@@ -361,7 +363,7 @@ object Backtester {
             val futures = bases.map { b ->
                 pool.submit(Callable<Series?> {
                     try {
-                        val cs = Binance.candles(b + "USDT", interval, 1000)
+                        val cs = Binance.candlesPaged(b + "USDT", interval, pages)
                         if (cs.size > WINDOW + 5) Series(cs, features(cs, ms, btc)) else null
                     } catch (e: Exception) {
                         null
@@ -438,6 +440,64 @@ object Backtester {
                                         iv, minR, maxR, pr.first, pr.second, tf, bf,
                                         aggregate(all.filter { it.first < cut }),
                                         aggregate(all.filter { it.first >= cut })
+                                    )
+                                )
+                                done++
+                                if (done % 16 == 0) progress("Bougies $iv : $done combinaisons testées…")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return rows
+    }
+
+    /**
+     * Balayage « explosion de prix » : hausse brutale d'une seule bougie de 1 ou 5 minutes, avec un
+     * volume minimal, des TP/SL variés, avec et sans filtre de tendance et de BTC.
+     * Mêmes périodes d'optimisation (60 %) et de validation (40 %) que l'autre balayage.
+     */
+    fun sweepExplosion(
+        cfg: Config, tc: TradeConfig, maxSymbols: Int, maxHold: Int,
+        progress: (String) -> Unit
+    ): List<SweepRow> {
+        progress("Chargement de la liste des cryptos…")
+        val bases = candidates(cfg, maxSymbols)
+        val slip = tc.simSlippagePct
+        val hold = max(1, maxHold)
+        val setups = listOf(
+            Triple("1m", 3, listOf(1.5, 2.5, 4.0)),
+            Triple("5m", 2, listOf(3.0, 5.0, 8.0))
+        )
+        val minRs = listOf(1.5, 3.0, 6.0)
+        val tpsl = listOf(Pair(3.0, 1.5), Pair(4.0, 2.0), Pair(5.0, 2.5), Pair(8.0, 4.0))
+        val flags = listOf(false, true)
+        val rows = ArrayList<SweepRow>()
+        for (st in setups) {
+            val iv = st.first
+            progress("Téléchargement des bougies $iv (plusieurs pages)…")
+            val series = load(bases, iv, st.second)
+            if (series.isEmpty()) continue
+            val tMin = series.minOf { it.cs.first().time }
+            val tMax = series.maxOf { it.cs.last().time }
+            val cut = tMin + ((tMax - tMin) * 0.6).toLong()
+            var done = 0
+            for (tf in flags) {
+                for (bf in flags) {
+                    for (chg in st.third) {
+                        val cfg2 = cfg.copy(trendFilter = tf, btcFilter = bf, explosionMin = chg)
+                        for (minR in minRs) {
+                            for (pr in tpsl) {
+                                val tc2 = tc.copy(tpPct = pr.first, slPct = pr.second)
+                                val all = ArrayList<Pair<Long, BtExit>>()
+                                for (s in series) all.addAll(trades(s, minR, 0.0, tc2, 0.0, hold, cfg2, slip))
+                                rows.add(
+                                    SweepRow(
+                                        iv, minR, 0.0, pr.first, pr.second, tf, bf,
+                                        aggregate(all.filter { it.first < cut }),
+                                        aggregate(all.filter { it.first >= cut }),
+                                        chg
                                     )
                                 )
                                 done++

@@ -288,6 +288,7 @@ class VolumeService : Service() {
             r.ratio >= threshold &&
                 (cfg.volMax <= 0.0 || r.ratio <= cfg.volMax) &&
                 (cfg.mode == "VOLUME" || abs(r.changePct) >= cfg.priceThreshold) &&
+                (cfg.explosionMin <= 0.0 || r.changePct >= cfg.explosionMin) &&
                 r.wickPct <= cfg.maxWickPct &&
                 (cfg.max24hPct <= 0.0 || r.chg24 <= cfg.max24hPct) &&
                 (cfg.atrMin <= 0.0 || r.atrPct >= cfg.atrMin) &&

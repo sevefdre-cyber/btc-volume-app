@@ -769,7 +769,8 @@ fun BtLine(label: String, r: BtResult) {
 
 fun sweepLabel(r: SweepRow): String {
     val range = if (r.maxR > 0) "${fmtNum(r.minR)}×–${fmtNum(r.maxR)}×" else "≥ ${fmtNum(r.minR)}×"
-    return "${r.interval} · volume $range · TP ${fmtNum(r.tp)} % / SL ${fmtNum(r.sl)} % · tendance ${if (r.trend) "✓" else "–"} · BTC ${if (r.btc) "✓" else "–"}"
+    val chg = if (r.minChg > 0) " · hausse ≥ ${fmtNum(r.minChg)} %" else ""
+    return "${r.interval}$chg · volume $range · TP ${fmtNum(r.tp)} % / SL ${fmtNum(r.sl)} % · tendance ${if (r.trend) "✓" else "–"} · BTC ${if (r.btc) "✓" else "–"}"
 }
 
 @Composable
@@ -889,6 +890,28 @@ fun BacktestCard(
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth()
                 ) { Text(if (busy) "Calcul en cours…" else "Lancer le balayage") }
+                Text("Balayage « explosion de prix »", fontWeight = FontWeight.SemiBold)
+                Muted("Cherche les hausses brutales d'une seule bougie (1 min et 5 min), avec un volume minimal, et compare TP/SL, filtre de tendance et filtre BTC. Même validation hors échantillon. Historique : environ 2 jours en 1 min, 7 jours en 5 min. Le téléchargement est plus long.")
+                Button(
+                    onClick = {
+                        busy = true
+                        sweep = null
+                        scope.launch {
+                            try {
+                                val rows = withContext(Dispatchers.IO) {
+                                    Backtester.sweepExplosion(cfg, tc, count.toInt().coerceIn(5, 200), hold.toInt()) { status = it }
+                                }
+                                sweep = rows
+                                status = "Terminé."
+                            } catch (e: Exception) {
+                                status = "Échec : ${e.message}"
+                            }
+                            busy = false
+                        }
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (busy) "Calcul en cours…" else "Lancer le balayage explosion") }
                 if (status.isNotEmpty()) Muted(status)
 
                 val rows = sweep
@@ -908,7 +931,7 @@ fun BacktestCard(
                     }
                     ranked.forEachIndexed { idx, row ->
                         SweepRowCard(idx + 1, row) {
-                            update(cfg.copy(interval = row.interval, volThreshold = row.minR, volMax = row.maxR, trendFilter = row.trend, btcFilter = row.btc))
+                            update(cfg.copy(interval = row.interval, volThreshold = row.minR, volMax = row.maxR, trendFilter = row.trend, btcFilter = row.btc, explosionMin = row.minChg))
                             updateTc(tc.copy(tpPct = row.tp, slPct = row.sl, autoMinRatio = row.minR))
                             status = "Réglages appliqués : ${sweepLabel(row)}"
                         }

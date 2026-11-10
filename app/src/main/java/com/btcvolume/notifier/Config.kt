@@ -7,6 +7,7 @@ data class Config(
     val interval: String = "5m",
     val volThreshold: Double = 3.0,         // ratio de volume minimum
     val volMax: Double = 0.0,               // ratio de volume maximum, 0 = pas de maximum
+    val explosionMin: Double = 0.0,         // explosion de prix : hausse minimale de la bougie (%), 0 = désactivé
     val mode: String = "VOLUME",            // VOLUME ou VOLUME_PRICE
     val priceThreshold: Double = 1.0,       // % de mouvement de prix (mode VOLUME_PRICE)
     val notifMode: String = "SUMMARY",      // SUMMARY ou INDIVIDUAL
@@ -47,6 +48,7 @@ object Prefs {
             interval = p.getString("interval", d.interval) ?: d.interval,
             volThreshold = p.dbl("volThreshold", d.volThreshold),
             volMax = p.dbl("volMax", d.volMax),
+            explosionMin = p.dbl("explosionMin", d.explosionMin),
             mode = p.getString("mode", d.mode) ?: d.mode,
             priceThreshold = p.dbl("priceThreshold", d.priceThreshold),
             notifMode = p.getString("notifMode", d.notifMode) ?: d.notifMode,
@@ -79,6 +81,7 @@ object Prefs {
             .putString("interval", cfg.interval)
             .putString("volThreshold", cfg.volThreshold.toString())
             .putString("volMax", cfg.volMax.toString())
+            .putString("explosionMin", cfg.explosionMin.toString())
             .putString("mode", cfg.mode)
             .putString("priceThreshold", cfg.priceThreshold.toString())
             .putString("notifMode", cfg.notifMode)
