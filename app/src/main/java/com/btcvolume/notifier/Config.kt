@@ -5,7 +5,8 @@ import android.content.SharedPreferences
 
 data class Config(
     val interval: String = "5m",
-    val volThreshold: Double = 3.0,
+    val volThreshold: Double = 3.0,         // ratio de volume minimum
+    val volMax: Double = 0.0,               // ratio de volume maximum, 0 = pas de maximum
     val mode: String = "VOLUME",            // VOLUME ou VOLUME_PRICE
     val priceThreshold: Double = 1.0,       // % de mouvement de prix (mode VOLUME_PRICE)
     val notifMode: String = "SUMMARY",      // SUMMARY ou INDIVIDUAL
@@ -37,6 +38,7 @@ object Prefs {
         return Config(
             interval = p.getString("interval", d.interval) ?: d.interval,
             volThreshold = p.dbl("volThreshold", d.volThreshold),
+            volMax = p.dbl("volMax", d.volMax),
             mode = p.getString("mode", d.mode) ?: d.mode,
             priceThreshold = p.dbl("priceThreshold", d.priceThreshold),
             notifMode = p.getString("notifMode", d.notifMode) ?: d.notifMode,
@@ -60,6 +62,7 @@ object Prefs {
         sp(c).edit()
             .putString("interval", cfg.interval)
             .putString("volThreshold", cfg.volThreshold.toString())
+            .putString("volMax", cfg.volMax.toString())
             .putString("mode", cfg.mode)
             .putString("priceThreshold", cfg.priceThreshold.toString())
             .putString("notifMode", cfg.notifMode)

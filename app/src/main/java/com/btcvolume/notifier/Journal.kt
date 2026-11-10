@@ -79,7 +79,7 @@ object Journal {
         valid(closed).groupBy { it.closeReason.ifEmpty { "?" } }.map { bucketOf(it.key, it.value) }
 }
 
-// ---------------------------------------------------------------- backtest
+// ---------------------------------------------------------------- backtest et balayage
 
 data class BtResult(
     val n: Int,
@@ -89,19 +89,42 @@ data class BtResult(
     val avgWinPct: Double,
     val avgLossPct: Double,
     val profitFactor: Double,
-    val maxDdPct: Double
+    val maxDdPct: Double,
+    val tpN: Int = 0,
+    val slN: Int = 0,
+    val trailN: Int = 0,
+    val timeN: Int = 0
 )
 
-private class BtTrade(val time: Long, val pnlA: Double, val pnlB: Double)
+class BtExit(val pct: Double, val idx: Int, val reason: String)
+
+class SweepRow(
+    val interval: String,
+    val minR: Double,
+    val maxR: Double,
+    val tp: Double,
+    val sl: Double,
+    val train: BtResult,
+    val valid: BtResult
+)
 
 object Backtester {
-    private const val WINDOW = 30
+    const val WINDOW = 30
     private val STABLE = setOf(
         "USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USDE", "USD1",
         "AEUR", "EUR", "EURI", "XUSD", "UST", "USDS", "PYUSD", "RLUSD"
     )
 
-    private fun candidates(cfg: Config, maxN: Int): List<String> {
+    class Feat(
+        val ratio: DoubleArray,
+        val change: DoubleArray,
+        val wick: DoubleArray,
+        val chg24: DoubleArray
+    )
+
+    class Series(val cs: List<Candle>, val f: Feat)
+
+    fun candidates(cfg: Config, maxN: Int): List<String> {
         val arr = JSONArray(Binance.publicGet("REAL", "/api/v3/ticker/24hr", mapOf("type" to "MINI")))
         class T(val base: String, val qv: Double)
         val l = ArrayList<T>()
@@ -123,11 +146,11 @@ object Backtester {
 
     private fun pct(entry: Double, exit: Double): Double = (exit / entry - 1) * 100 - 0.2   // 0,2 % de frais aller-retour
 
-    /** Retourne (résultat en %, index de la bougie de sortie). Le SL est supposé touché avant le TP dans une même bougie. */
-    private fun exitTrade(
+    /** Le SL est supposé touché avant le TP lorsque les deux le sont dans la même bougie. */
+    fun exitTrade(
         cs: List<Candle>, from: Int, entry: Double, tc: TradeConfig,
         trail: Double, maxHold: Int, slip: Double
-    ): Pair<Double, Int> {
+    ): BtExit {
         val tp = entry * (1 + tc.tpPct / 100)
         var stop = entry * (1 - tc.slPct / 100)
         var peak = entry
@@ -138,10 +161,10 @@ object Backtester {
             val c = cs[j]
             if (c.low <= stop) {
                 val px = (if (c.open < stop) c.open else stop) * (1 - slip / 100)
-                return Pair(pct(entry, px), j)
+                return BtExit(pct(entry, px), j, if (activated) "SUIVEUR" else "SL")
             }
             if (trail <= 0.0) {
-                if (c.high >= tp) return Pair(pct(entry, tp), j)
+                if (c.high >= tp) return BtExit(pct(entry, tp), j, "TP")
             } else {
                 peak = max(peak, c.high)
                 if (peak >= tp) activated = true
@@ -149,58 +172,67 @@ object Backtester {
             }
             j++
         }
-        return Pair(pct(entry, cs[last].close * (1 - slip / 100)), last)
+        return BtExit(pct(entry, cs[last].close * (1 - slip / 100)), last, "DUREE")
     }
 
-    private fun simulate(
-        base: String, cfg: Config, tc: TradeConfig, trail: Double, maxHold: Int, slip: Double
-    ): List<BtTrade> {
-        val cs = Binance.candles(base + "USDT", cfg.interval, 1000)
+    fun features(cs: List<Candle>, ms: Long): Feat {
         val n = cs.size
-        val ms = VolumeService.intervalMs(cfg.interval)
         val k = (86_400_000L / ms).toInt()
-        val thr = if (cfg.volThreshold < 1.05) 1.05 else cfg.volThreshold
-        val minRatio = max(thr, tc.autoMinRatio)
-        val out = ArrayList<BtTrade>()
+        val ratio = DoubleArray(n)
+        val change = DoubleArray(n)
+        val wick = DoubleArray(n)
+        val chg24 = DoubleArray(n)
+        for (i in WINDOW until n) {
+            var avg = 0.0
+            for (j in i - WINDOW until i) avg += cs[j].vol
+            avg /= WINDOW
+            val c = cs[i]
+            ratio[i] = if (avg > 0) c.vol / avg else 0.0
+            change[i] = if (c.open > 0) (c.close - c.open) / c.open * 100 else 0.0
+            val rng = c.high - c.low
+            wick[i] = if (rng > 0) (c.high - max(c.open, c.close)) / rng * 100 else 0.0
+            chg24[i] = if (i >= k && cs[i - k].close > 0) (c.close - cs[i - k].close) / cs[i - k].close * 100 else 0.0
+        }
+        return Feat(ratio, change, wick, chg24)
+    }
+
+    /** Trades d'une crypto pour un jeu de paramètres. Retourne (heure d'entrée, sortie). */
+    fun trades(
+        s: Series, minR: Double, maxR: Double, tc: TradeConfig,
+        trail: Double, hold: Int, cfg: Config, slip: Double
+    ): List<Pair<Long, BtExit>> {
+        val cs = s.cs
+        val f = s.f
+        val n = cs.size
+        val cooldown = cfg.cooldownMin * 60_000L
+        val out = ArrayList<Pair<Long, BtExit>>()
         var blockedUntil = -1
         var lastSigTime = 0L
         var i = WINDOW
         while (i < n - 1) {
-            val c = cs[i]
-            var avg = 0.0
-            for (j in i - WINDOW until i) avg += cs[j].vol
-            avg /= WINDOW
-            if (avg > 0 && c.open > 0) {
-                val ratio = c.vol / avg
-                val change = (c.close - c.open) / c.open * 100
-                val rng = c.high - c.low
-                val wick = if (rng > 0) (c.high - max(c.open, c.close)) / rng * 100 else 0.0
-                val chg24 = if (i >= k && cs[i - k].close > 0) (c.close - cs[i - k].close) / cs[i - k].close * 100 else 0.0
-                val ok = ratio >= minRatio &&
-                    (cfg.mode == "VOLUME" || abs(change) >= cfg.priceThreshold) &&
-                    wick <= cfg.maxWickPct &&
-                    (cfg.max24hPct <= 0 || chg24 <= cfg.max24hPct) &&
-                    (!tc.buyOnlyUp || change >= 0) &&
-                    i > blockedUntil &&
-                    (c.time - lastSigTime) >= cfg.cooldownMin * 60_000L
-                if (ok) {
-                    lastSigTime = c.time
-                    val entry = cs[i + 1].open * (1 + slip / 100)
-                    val a = exitTrade(cs, i + 1, entry, tc, 0.0, maxHold, slip)
-                    val b = exitTrade(cs, i + 1, entry, tc, trail, maxHold, slip)
-                    out.add(BtTrade(cs[i + 1].time, a.first, b.first))
-                    blockedUntil = max(a.second, b.second)
-                }
+            val ratio = f.ratio[i]
+            if (ratio >= minR && (maxR <= 0.0 || ratio <= maxR) && i > blockedUntil &&
+                (cfg.mode == "VOLUME" || abs(f.change[i]) >= cfg.priceThreshold) &&
+                f.wick[i] <= cfg.maxWickPct &&
+                (cfg.max24hPct <= 0.0 || f.chg24[i] <= cfg.max24hPct) &&
+                (!tc.buyOnlyUp || f.change[i] >= 0) &&
+                (cs[i].time - lastSigTime) >= cooldown
+            ) {
+                lastSigTime = cs[i].time
+                val entry = cs[i + 1].open * (1 + slip / 100)
+                val ex = exitTrade(cs, i + 1, entry, tc, trail, hold, slip)
+                out.add(Pair(cs[i + 1].time, ex))
+                blockedUntil = ex.idx
             }
             i++
         }
         return out
     }
 
-    private fun agg(trades: List<BtTrade>, pick: (BtTrade) -> Double): BtResult {
-        val s = trades.sortedBy { it.time }
-        if (s.isEmpty()) return BtResult(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        val v = s.map(pick)
+    fun aggregate(items: List<Pair<Long, BtExit>>): BtResult {
+        if (items.isEmpty()) return BtResult(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        val s = items.sortedBy { it.first }
+        val v = s.map { it.second.pct }
         val wins = v.filter { it > 0 }
         val losses = v.filter { it <= 0 }
         val gw = wins.sum()
@@ -221,40 +253,102 @@ object Backtester {
             avgWinPct = if (wins.isEmpty()) 0.0 else gw / wins.size,
             avgLossPct = if (losses.isEmpty()) 0.0 else -gl / losses.size,
             profitFactor = if (gl > 0) gw / gl else Double.POSITIVE_INFINITY,
-            maxDdPct = dd
+            maxDdPct = dd,
+            tpN = s.count { it.second.reason == "TP" },
+            slN = s.count { it.second.reason == "SL" },
+            trailN = s.count { it.second.reason == "SUIVEUR" },
+            timeN = s.count { it.second.reason == "DUREE" }
         )
     }
 
-    /** Compare deux règles de sortie (A : TP fixe, B : stop suiveur après le TP) sur les mêmes signaux. */
+    private fun load(bases: List<String>, interval: String): List<Series> {
+        val ms = VolumeService.intervalMs(interval)
+        val pool = Executors.newFixedThreadPool(6)
+        try {
+            val futures = bases.map { b ->
+                pool.submit(Callable<Series?> {
+                    try {
+                        val cs = Binance.candles(b + "USDT", interval, 1000)
+                        if (cs.size > WINDOW + 5) Series(cs, features(cs, ms)) else null
+                    } catch (e: Exception) {
+                        null
+                    }
+                })
+            }
+            return futures.mapNotNull { it.get() }
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    /** Compare deux règles de sortie : A = TP fixe, B = stop suiveur après le TP. */
     fun run(
         cfg: Config, tc: TradeConfig, maxSymbols: Int, trail: Double, maxHold: Int,
         progress: (String) -> Unit
     ): Pair<BtResult, BtResult> {
         progress("Chargement de la liste des cryptos…")
         val bases = candidates(cfg, maxSymbols)
+        progress("Téléchargement des bougies…")
+        val series = load(bases, cfg.interval)
+        val thr = if (cfg.volThreshold < 1.05) 1.05 else cfg.volThreshold
+        val minR = max(thr, tc.autoMinRatio)
         val slip = tc.simSlippagePct
-        val hold = if (maxHold < 1) 1 else maxHold
-        val pool = Executors.newFixedThreadPool(6)
-        val all = ArrayList<BtTrade>()
-        try {
-            val futures = bases.map { b ->
-                pool.submit(Callable<List<BtTrade>> {
-                    try {
-                        simulate(b, cfg, tc, trail, hold, slip)
-                    } catch (e: Exception) {
-                        emptyList()
-                    }
-                })
-            }
-            var done = 0
-            for (f in futures) {
-                all.addAll(f.get())
-                done++
-                if (done % 10 == 0) progress("Analyse $done/${bases.size}…")
-            }
-        } finally {
-            pool.shutdownNow()
+        val hold = max(1, maxHold)
+        val a = ArrayList<Pair<Long, BtExit>>()
+        val b = ArrayList<Pair<Long, BtExit>>()
+        for (s in series) {
+            a.addAll(trades(s, minR, cfg.volMax, tc, 0.0, hold, cfg, slip))
+            b.addAll(trades(s, minR, cfg.volMax, tc, trail, hold, cfg, slip))
         }
-        return Pair(agg(all) { it.pnlA }, agg(all) { it.pnlB })
+        return Pair(aggregate(a), aggregate(b))
+    }
+
+    /**
+     * Balayage : teste de nombreuses combinaisons (taille des bougies, intervalle de volume, TP/SL)
+     * avec une sortie à TP fixe. Les 60 % les plus anciens de la période servent à l'optimisation,
+     * les 40 % les plus récents à la validation hors échantillon.
+     */
+    fun sweep(
+        cfg: Config, tc: TradeConfig, maxSymbols: Int, maxHold: Int,
+        progress: (String) -> Unit
+    ): List<SweepRow> {
+        progress("Chargement de la liste des cryptos…")
+        val bases = candidates(cfg, maxSymbols)
+        val slip = tc.simSlippagePct
+        val hold = max(1, maxHold)
+        val intervals = listOf("5m", "15m")
+        val minRs = listOf(3.0, 5.0, 8.0, 12.0)
+        val maxRs = listOf(0.0, 15.0, 25.0)
+        val tpsl = listOf(Pair(3.0, 1.5), Pair(4.0, 2.0), Pair(6.0, 3.0), Pair(8.0, 4.0))
+        val rows = ArrayList<SweepRow>()
+        for (iv in intervals) {
+            progress("Téléchargement des bougies $iv…")
+            val series = load(bases, iv)
+            if (series.isEmpty()) continue
+            val tMin = series.minOf { it.cs.first().time }
+            val tMax = series.maxOf { it.cs.last().time }
+            val cut = tMin + ((tMax - tMin) * 0.6).toLong()
+            var done = 0
+            for (minR in minRs) {
+                for (maxR in maxRs) {
+                    if (maxR > 0.0 && maxR <= minR) continue
+                    for (pr in tpsl) {
+                        val tc2 = tc.copy(tpPct = pr.first, slPct = pr.second)
+                        val all = ArrayList<Pair<Long, BtExit>>()
+                        for (s in series) all.addAll(trades(s, minR, maxR, tc2, 0.0, hold, cfg, slip))
+                        rows.add(
+                            SweepRow(
+                                iv, minR, maxR, pr.first, pr.second,
+                                aggregate(all.filter { it.first < cut }),
+                                aggregate(all.filter { it.first >= cut })
+                            )
+                        )
+                        done++
+                        if (done % 8 == 0) progress("Bougies $iv : $done combinaisons testées…")
+                    }
+                }
+            }
+        }
+        return rows
     }
 }

@@ -169,7 +169,7 @@ fun PositionCard(p: Position, price: Double?, onClose: (() -> Unit)?) {
 // ---------------------------------------------------------------- onglet Trade
 
 @Composable
-fun TradeTab(cfg: Config, tc: TradeConfig, updateTc: (TradeConfig) -> Unit) {
+fun TradeTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (TradeConfig) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf<String?>(null) }
@@ -366,7 +366,7 @@ fun TradeTab(cfg: Config, tc: TradeConfig, updateTc: (TradeConfig) -> Unit) {
         }
 
         item { JournalCard(closedList, tc) }
-        item { BacktestCard(cfg, tc) }
+        item { BacktestCard(cfg, tc, update, updateTc) }
 
         item { Text("Jetons sélectionnés par les alertes", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) }
         item {
@@ -748,7 +748,9 @@ fun JournalCard(closed: List<Position>, tc: TradeConfig) {
     }
 }
 
-// ---------------------------------------------------------------- Backtest
+// ---------------------------------------------------------------- Backtest et balayage
+
+fun winPct(r: BtResult): Int = if (r.n == 0) 0 else r.wins * 100 / r.n
 
 @Composable
 fun BtLine(label: String, r: BtResult) {
@@ -757,20 +759,62 @@ fun BtLine(label: String, r: BtResult) {
         Muted("Aucun signal sur la période avec ces réglages.")
     } else {
         Text(
-            "${r.n} trades · réussite ${r.wins * 100 / r.n} % · total ${fmtPct(r.totalPct)} · ${fmtPct(r.avgPct)} par trade",
+            "${r.n} trades · réussite ${winPct(r)} % · total ${fmtPct(r.totalPct)} · ${fmtPct(r.avgPct)} par trade",
             color = pnlColor(r.totalPct), fontSize = 13.sp
         )
         Muted("Gain moyen ${fmtPct(r.avgWinPct)} · perte moyenne ${fmtPct(r.avgLossPct)} · facteur de profit ${fmtPf(r.profitFactor)} · repli max ${fmtPct(-r.maxDdPct)}")
+        Muted("Sorties : TP ${r.tpN} · SL ${r.slN} · suiveur ${r.trailN} · durée max ${r.timeN}")
+    }
+}
+
+fun sweepLabel(r: SweepRow): String {
+    val range = if (r.maxR > 0) "${fmtNum(r.minR)}×–${fmtNum(r.maxR)}×" else "≥ ${fmtNum(r.minR)}×"
+    return "${r.interval} · volume $range · TP ${fmtNum(r.tp)} % / SL ${fmtNum(r.sl)} %"
+}
+
+@Composable
+fun SweepRowCard(rank: Int, r: SweepRow, onApply: () -> Unit) {
+    val confirmed = r.valid.n >= 15 && r.valid.avgPct > 0 && r.valid.profitFactor > 1.1
+    val verdict = when {
+        confirmed -> "✓ confirmé hors échantillon"
+        r.valid.n < 15 -> "? trop peu de trades en validation"
+        else -> "✗ non confirmé hors échantillon"
+    }
+    AppCard {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("#$rank · ${sweepLabel(r)}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text(
+                "Optimisation : ${r.train.n} trades · ${fmtPct(r.train.avgPct)} par trade · PF ${fmtPf(r.train.profitFactor)} · réussite ${winPct(r.train)} %",
+                color = pnlColor(r.train.avgPct), fontSize = 12.sp
+            )
+            Text(
+                "Validation : ${r.valid.n} trades · ${fmtPct(r.valid.avgPct)} par trade · PF ${fmtPf(r.valid.profitFactor)} · réussite ${winPct(r.valid)} %",
+                color = pnlColor(r.valid.avgPct), fontSize = 12.sp
+            )
+            Muted("Sorties en validation : TP ${r.valid.tpN} · SL ${r.valid.slN} · durée max ${r.valid.timeN}")
+            Text(
+                verdict,
+                color = if (confirmed) UpColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold, fontSize = 12.sp
+            )
+            TextButton(onClick = onApply) { Text("Appliquer ces réglages") }
+        }
     }
 }
 
 @Composable
-fun BacktestCard(cfg: Config, tc: TradeConfig) {
+fun BacktestCard(
+    cfg: Config,
+    tc: TradeConfig,
+    update: (Config) -> Unit,
+    updateTc: (TradeConfig) -> Unit
+) {
     val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
     var result by remember { mutableStateOf<Pair<BtResult, BtResult>?>(null) }
+    var sweep by remember { mutableStateOf<List<SweepRow>?>(null) }
     var count by remember { mutableStateOf(60.0) }
     var trail by remember { mutableStateOf(2.0) }
     var hold by remember { mutableStateOf(48.0) }
@@ -784,14 +828,16 @@ fun BacktestCard(cfg: Config, tc: TradeConfig) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("🧪 Backtest", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                Text("🧪 Backtest et balayage", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                 Text(if (open) "▴" else "▾", fontSize = 18.sp)
             }
             if (open) {
-                Muted("Rejoue vos règles (filtres de scan, TP, SL, glissement) sur l'historique récent des cryptos les plus échangées de votre sélection, et compare un TP fixe à un stop suiveur. L'historique est court (environ 3 jours en bougies de 5 min) : avec peu de trades, le résultat est peu fiable.")
+                Muted("Rejoue vos règles (filtres de scan, intervalle de volume, TP, SL, glissement) sur l'historique récent des cryptos les plus échangées de votre sélection. L'historique est court (environ 3 jours en bougies de 5 min, 10 jours en 15 min) : avec peu de trades, le résultat est peu fiable.")
                 NumField("Nombre de cryptos testées", count) { count = it }
-                NumField("Stop suiveur (%) activé après le TP", trail) { trail = it }
                 NumField("Durée maximale d'un trade (bougies)", hold) { hold = it }
+
+                Text("Test de vos réglages actuels", fontWeight = FontWeight.SemiBold)
+                NumField("Stop suiveur (%) activé après le TP", trail) { trail = it }
                 Button(
                     onClick = {
                         busy = true
@@ -815,13 +861,56 @@ fun BacktestCard(cfg: Config, tc: TradeConfig) {
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth()
                 ) { Text(if (busy) "Calcul en cours…" else "Lancer le backtest") }
-                if (status.isNotEmpty()) Muted(status)
                 val r = result
                 if (r != null) {
                     BtLine("A · TP fixe +${fmtNum(tc.tpPct)} % / SL −${fmtNum(tc.slPct)} %", r.first)
                     BtLine("B · Stop suiveur ${fmtNum(trail)} % après le TP", r.second)
-                    Muted("Hypothèses : signal à la clôture de la bougie, entrée à l'ouverture suivante, frais 0,2 % aller-retour, glissement ${fmtNum(tc.simSlippagePct)} %, SL supposé touché avant le TP dans une même bougie. Limite de positions, filtre Bitcoin et profondeur du carnet d'ordres non simulés.")
                 }
+
+                Text("Balayage automatique des réglages", fontWeight = FontWeight.SemiBold)
+                Muted("Teste environ 90 combinaisons (bougies 5 et 15 min, volume minimum et maximum, TP/SL) avec sortie à TP fixe. Les 60 % les plus anciens de la période servent à choisir, les 40 % les plus récents à vérifier. Seule la validation compte.")
+                Button(
+                    onClick = {
+                        busy = true
+                        sweep = null
+                        scope.launch {
+                            try {
+                                val rows = withContext(Dispatchers.IO) {
+                                    Backtester.sweep(cfg, tc, count.toInt().coerceIn(5, 200), hold.toInt()) { status = it }
+                                }
+                                sweep = rows
+                                status = "Terminé."
+                            } catch (e: Exception) {
+                                status = "Échec : ${e.message}"
+                            }
+                            busy = false
+                        }
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (busy) "Calcul en cours…" else "Lancer le balayage") }
+                if (status.isNotEmpty()) Muted(status)
+
+                val rows = sweep
+                if (rows != null) {
+                    val eligible = rows.filter { it.train.n >= 30 }
+                    val ranked = eligible.sortedByDescending { it.train.avgPct }.take(5)
+                    val holdUp = eligible.count { it.train.avgPct > 0 && it.valid.n >= 15 && it.valid.avgPct > 0 }
+                    val positiveTrain = eligible.count { it.train.avgPct > 0 }
+                    Muted("${rows.size} combinaisons testées · ${eligible.size} avec au moins 30 trades en optimisation · $holdUp restent positives en validation sur $positiveTrain positives en optimisation.")
+                    if (ranked.isEmpty()) {
+                        Muted("Aucune combinaison avec au moins 30 trades en optimisation : augmentez le nombre de cryptos ou assouplissez les filtres.")
+                    }
+                    ranked.forEachIndexed { idx, row ->
+                        SweepRowCard(idx + 1, row) {
+                            update(cfg.copy(interval = row.interval, volThreshold = row.minR, volMax = row.maxR))
+                            updateTc(tc.copy(tpPct = row.tp, slPct = row.sl, autoMinRatio = row.minR))
+                            status = "Réglages appliqués : ${sweepLabel(row)}"
+                        }
+                    }
+                    Muted("Avec autant de combinaisons, certaines paraissent bonnes par pur hasard. Une combinaison n'est crédible que si elle reste positive en validation, avec assez de trades, et idéalement si vous la retestez plus tard sur une nouvelle période.")
+                }
+                Muted("Hypothèses : signal à la clôture de la bougie, entrée à l'ouverture suivante, frais 0,2 % aller-retour, glissement ${fmtNum(tc.simSlippagePct)} %, SL supposé touché avant le TP dans une même bougie. Limite de positions, filtre Bitcoin et profondeur du carnet d'ordres non simulés.")
             }
         }
     }

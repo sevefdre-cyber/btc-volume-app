@@ -279,6 +279,7 @@ class VolumeService : Service() {
         }
         val hits = if (!btcOk) emptyList() else sorted.filter { r ->
             r.ratio >= threshold &&
+                (cfg.volMax <= 0.0 || r.ratio <= cfg.volMax) &&
                 (cfg.mode == "VOLUME" || abs(r.changePct) >= cfg.priceThreshold) &&
                 r.wickPct <= cfg.maxWickPct &&
                 (cfg.max24hPct <= 0.0 || r.chg24 <= cfg.max24hPct) &&

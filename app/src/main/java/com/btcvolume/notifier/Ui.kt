@@ -100,7 +100,7 @@ fun MainScreen() {
             when (tab) {
                 0 -> ScannerTab(cfg, update)
                 1 -> AlertsTab()
-                2 -> TradeTab(cfg, tc, updateTc)
+                2 -> TradeTab(cfg, update, tc, updateTc)
                 3 -> ListsTab(cfg, update)
                 else -> SettingsTab(cfg, update, tc, updateTc)
             }
@@ -447,9 +447,13 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc
                 listOf("1m" to "1 min", "5m" to "5 min", "15m" to "15 min", "1h" to "1 heure"),
                 cfg.interval
             ) { update(cfg.copy(interval = it)) }
-            NumField("Seuil de volume (× la moyenne)", cfg.volThreshold) {
+            NumField("Volume minimum (× la moyenne)", cfg.volThreshold) {
                 update(cfg.copy(volThreshold = it))
             }
+            NumField("Volume maximum (×, 0 = pas de maximum)", cfg.volMax) {
+                update(cfg.copy(volMax = it))
+            }
+            Muted("Intervalle de volume : sous le minimum le signal est trop faible, au-dessus du maximum le mouvement est probablement déjà trop avancé.")
             Text("Type d'alerte")
             ChoiceRow(
                 listOf("VOLUME" to "Volume seul", "VOLUME_PRICE" to "Volume + prix"),
