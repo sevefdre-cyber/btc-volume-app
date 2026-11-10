@@ -1,0 +1,503 @@
+package com.btcvolume.notifier
+
+import android.Manifest
+import android.content.Intent
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+// ---------------------------------------------------------------- écran principal
+
+@Composable
+fun MainScreen() {
+    val ctx = LocalContext.current
+    var cfg by remember { mutableStateOf(Prefs.load(ctx)) }
+    val update: (Config) -> Unit = {
+        cfg = it
+        Prefs.save(ctx, it)
+    }
+    var tab by remember { mutableStateOf(0) }
+
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33) permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    val tabs = listOf("📊" to "Scanner", "🔔" to "Alertes", "⭐" to "Listes", "⚙️" to "Réglages")
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                tabs.forEachIndexed { i, pair ->
+                    NavigationBarItem(
+                        selected = tab == i,
+                        onClick = { tab = i },
+                        icon = { Text(pair.first, fontSize = 20.sp) },
+                        label = { Text(pair.second) }
+                    )
+                }
+            }
+        }
+    ) { pad ->
+        Box(Modifier.padding(pad)) {
+            when (tab) {
+                0 -> ScannerTab(cfg, update)
+                1 -> AlertsTab()
+                2 -> ListsTab(cfg, update)
+                else -> SettingsTab(cfg, update)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- composants communs
+
+@Composable
+fun AppCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        ),
+        content = content
+    )
+}
+
+@Composable
+fun RatioBadge(ratio: Double) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        Text(
+            text = fmtRatio(ratio),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp
+        )
+    }
+}
+
+@Composable
+fun Title(text: String) {
+    Text(text, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+}
+
+@Composable
+fun Muted(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+// ---------------------------------------------------------------- onglet Scanner
+
+@Composable
+fun ScannerTab(cfg: Config, update: (Config) -> Unit) {
+    val ctx = LocalContext.current
+    val running by ScanState.running.collectAsState()
+    val status by ScanState.status.collectAsState()
+    val rows by ScanState.rows.collectAsState()
+    val monitored by ScanState.monitored.collectAsState()
+    val total by ScanState.totalPairs.collectAsState()
+
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item { Title("Volume Scanner") }
+        item {
+            AppCard {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(10.dp)
+                                .background(if (running) UpColor else DownColor, CircleShape)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (running) "Surveillance active" else "Arrêtée",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Muted(status)
+                    if (running && monitored > 0) {
+                        Muted("$monitored cryptos surveillées sur $total paires USDT")
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                if (running) VolumeService.stop(ctx) else VolumeService.start(ctx)
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) { Text(if (running) "Arrêter" else "Démarrer") }
+                        if (running) {
+                            OutlinedButton(
+                                onClick = { VolumeService.forceScan = true },
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Scanner") }
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Text(
+                "Cryptos analysées (${rows.size}) · triées par ratio de volume",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        if (rows.isEmpty()) {
+            item { Muted("Rien à afficher. Démarrez la surveillance : le premier scan prend quelques secondes.") }
+        }
+        items(rows, key = { it.symbol }) { r -> ScanRowCard(r, cfg, update) }
+    }
+}
+
+@Composable
+fun ScanRowCard(r: ScanRow, cfg: Config, update: (Config) -> Unit) {
+    val fav = r.symbol in cfg.favorites
+    AppCard {
+        Row(
+            Modifier.padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(r.symbol, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Muted("${fmtPrice(r.price)} USDT · Vol ${fmtVol(r.volUsdt)}")
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                RatioBadge(r.ratio)
+                Text(
+                    fmtPct(r.changePct),
+                    color = if (r.changePct >= 0) UpColor else DownColor,
+                    fontSize = 13.sp
+                )
+            }
+            Text(
+                if (fav) "★" else "☆",
+                fontSize = 22.sp,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable {
+                        val f = if (fav) cfg.favorites - r.symbol else cfg.favorites + r.symbol
+                        update(cfg.copy(favorites = f))
+                    }
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
+            )
+            Text(
+                "🚫",
+                fontSize = 18.sp,
+                modifier = Modifier
+                    .clickable {
+                        update(
+                            cfg.copy(
+                                excluded = cfg.excluded + r.symbol,
+                                favorites = cfg.favorites - r.symbol
+                            )
+                        )
+                    }
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------- onglet Alertes
+
+@Composable
+fun AlertsTab() {
+    val ctx = LocalContext.current
+    val list by History.items.collectAsState()
+    val fmt = remember { SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()) }
+
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Title("Historique (${list.size})")
+                if (list.isNotEmpty()) {
+                    TextButton(onClick = { History.clear(ctx) }) { Text("Effacer") }
+                }
+            }
+        }
+        if (list.isEmpty()) {
+            item { Muted("Aucune alerte pour le moment. Les pics détectés apparaîtront ici.") }
+        }
+        items(list) { a ->
+            AppCard {
+                Row(
+                    Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(a.symbol, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Muted("${fmt.format(Date(a.time))} · ${fmtPrice(a.price)} USDT")
+                        Muted("Vol bougie ${fmtVol(a.volUsdt)} USDT")
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        RatioBadge(a.ratio)
+                        Text(
+                            fmtPct(a.changePct),
+                            color = if (a.changePct >= 0) UpColor else DownColor,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- onglet Listes
+
+@Composable
+fun ListsTab(cfg: Config, update: (Config) -> Unit) {
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item { Title("Listes") }
+        item { Text("⭐ Favoris", fontWeight = FontWeight.SemiBold) }
+        item { Muted("Toujours surveillés, même hors du filtre de prix et de volume.") }
+        item { SymbolEditor(cfg.favorites) { update(cfg.copy(favorites = it)) } }
+        item { Text("🚫 Exclusions", fontWeight = FontWeight.SemiBold) }
+        item { Muted("Jamais surveillées, quoi qu'il arrive.") }
+        item { SymbolEditor(cfg.excluded) { update(cfg.copy(excluded = it)) } }
+    }
+}
+
+@Composable
+fun SymbolEditor(symbols: Set<String>, onChange: (Set<String>) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    AppCard {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("Ex : DOGE") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(onClick = {
+                    val s = text.trim().uppercase().removeSuffix("USDT")
+                    if (s.isNotEmpty()) onChange(symbols + s)
+                    text = ""
+                }) { Text("Ajouter") }
+            }
+            if (symbols.isEmpty()) Muted("Aucune crypto dans cette liste.")
+            for (s in symbols.sorted()) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(s, fontWeight = FontWeight.SemiBold)
+                    TextButton(onClick = { onChange(symbols - s) }) { Text("Retirer") }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- onglet Réglages
+
+@Composable
+fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
+    AppCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+            content()
+        }
+    }
+}
+
+@Composable
+fun ChoiceRow(options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.horizontalScroll(rememberScrollState())
+    ) {
+        for (o in options) {
+            FilterChip(
+                selected = selected == o.first,
+                onClick = { onSelect(o.first) },
+                label = { Text(o.second) }
+            )
+        }
+    }
+}
+
+@Composable
+fun NumField(label: String, value: Double, onValue: (Double) -> Unit) {
+    var text by remember { mutableStateOf(fmtNum(value)) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { t ->
+            text = t
+            t.replace(',', '.').toDoubleOrNull()?.let(onValue)
+        },
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+fun SwitchRow(title: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Medium)
+            Muted(sub)
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+fun SettingsTab(cfg: Config, update: (Config) -> Unit) {
+    val ctx = LocalContext.current
+    Column(
+        Modifier
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Title("Réglages")
+
+        Section("Détection") {
+            Text("Taille des bougies")
+            ChoiceRow(
+                listOf("1m" to "1 min", "5m" to "5 min", "15m" to "15 min", "1h" to "1 heure"),
+                cfg.interval
+            ) { update(cfg.copy(interval = it)) }
+            NumField("Seuil de volume (× la moyenne)", cfg.volThreshold) {
+                update(cfg.copy(volThreshold = it))
+            }
+            Text("Type d'alerte")
+            ChoiceRow(
+                listOf("VOLUME" to "Volume seul", "VOLUME_PRICE" to "Volume + prix"),
+                cfg.mode
+            ) { update(cfg.copy(mode = it)) }
+            if (cfg.mode == "VOLUME_PRICE") {
+                NumField("Mouvement de prix minimum (%)", cfg.priceThreshold) {
+                    update(cfg.copy(priceThreshold = it))
+                }
+            }
+            NumField("Délai de repos par crypto (minutes)", cfg.cooldownMin.toDouble()) {
+                update(cfg.copy(cooldownMin = it.toInt().coerceAtLeast(0)))
+            }
+        }
+
+        Section("Sélection des cryptos (paires USDT)") {
+            NumField("Prix minimum (USDT)", cfg.priceMin) { update(cfg.copy(priceMin = it)) }
+            NumField("Prix maximum (USDT)", cfg.priceMax) { update(cfg.copy(priceMax = it)) }
+            NumField("Volume 24h minimum (USDT)", cfg.minVol24h) { update(cfg.copy(minVol24h = it)) }
+            NumField("Nombre maximum de cryptos analysées", cfg.maxSymbols.toDouble()) {
+                update(cfg.copy(maxSymbols = it.toInt().coerceAtLeast(1)))
+            }
+            Muted("Les favoris ignorent ces filtres. Les stablecoins sont exclus automatiquement.")
+        }
+
+        Section("Notifications") {
+            ChoiceRow(
+                listOf("SUMMARY" to "Résumé groupé", "INDIVIDUAL" to "Une par crypto"),
+                cfg.notifMode
+            ) { update(cfg.copy(notifMode = it)) }
+            Muted("Résumé : une seule notification avec le top 5. Une par crypto : maximum 10 par scan.")
+        }
+
+        Section("Système") {
+            SwitchRow(
+                "Démarrage automatique",
+                "Relance la surveillance après un redémarrage du téléphone",
+                cfg.autoStart
+            ) { update(cfg.copy(autoStart = it)) }
+            SwitchRow(
+                "Garder le CPU actif",
+                "Plus fiable écran éteint, consomme un peu plus. Effet au prochain démarrage.",
+                cfg.wakeLock
+            ) { update(cfg.copy(wakeLock = it)) }
+            OutlinedButton(
+                onClick = {
+                    ctx.startActivity(
+                        Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Désactiver l'optimisation batterie") }
+        }
+
+        Muted("Les alertes sont des signaux d'information, pas des conseils d'investissement.")
+    }
+}

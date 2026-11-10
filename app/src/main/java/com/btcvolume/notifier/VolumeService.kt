@@ -5,47 +5,77 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import androidx.core.content.ContextCompat
 import org.json.JSONArray
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
+
+private class Cand(val symbol: String, val base: String, val price: Double, val qv24: Double)
 
 class VolumeService : Service() {
 
     companion object {
         const val CH_SERVICE = "service"
         const val CH_ALERT = "alerts"
-        const val SYMBOL = "BTCUSDT"
         const val WINDOW = 30
-        const val POLL_MS = 30_000L
+
+        @Volatile
+        var forceScan = false
+
+        private val STABLE = setOf(
+            "USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USDE", "USD1",
+            "AEUR", "EUR", "EURI", "XUSD", "UST", "USDS", "PYUSD", "RLUSD"
+        )
+
+        fun start(c: Context) {
+            Prefs.setRunning(c, true)
+            ContextCompat.startForegroundService(c, Intent(c, VolumeService::class.java))
+        }
+
+        fun stop(c: Context) {
+            Prefs.setRunning(c, false)
+            c.stopService(Intent(c, VolumeService::class.java))
+        }
+
+        fun intervalMs(i: String): Long = when (i) {
+            "1m" -> 60_000L
+            "15m" -> 900_000L
+            "1h" -> 3_600_000L
+            else -> 300_000L
+        }
     }
 
     @Volatile private var running = false
     private var worker: Thread? = null
+    private var wakeLock: PowerManager.WakeLock? = null
     private var alertId = 100
+    private val lastCandle = HashMap<String, Long>()
+    private val lastAlertAt = HashMap<String, Long>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        History.load(this)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createChannels()
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-        val notif = Notification.Builder(this, CH_SERVICE)
-            .setContentTitle("Surveillance du volume $SYMBOL")
-            .setContentText("Actif en arrière-plan")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentIntent(open)
-            .setOngoing(true)
-            .build()
-
+        val notif = fgNotification("Démarrage…")
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
@@ -54,6 +84,15 @@ class VolumeService : Service() {
 
         if (worker?.isAlive != true) {
             running = true
+            ScanState.running.value = true
+            forceScan = true
+            if (Prefs.load(this).wakeLock) {
+                val pm = getSystemService(PowerManager::class.java)
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "volumescanner:scan").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
             worker = Thread { loop() }.also { it.start() }
         }
         return START_STICKY
@@ -62,9 +101,13 @@ class VolumeService : Service() {
     override fun onDestroy() {
         running = false
         worker?.interrupt()
-        setStatus("Arrêté")
+        wakeLock?.let { if (it.isHeld) it.release() }
+        ScanState.running.value = false
+        ScanState.status.value = "Arrêté"
         super.onDestroy()
     }
+
+    // ---------- Notifications ----------
 
     private fun createChannels() {
         val nm = getSystemService(NotificationManager::class.java)
@@ -76,96 +119,203 @@ class VolumeService : Service() {
         )
     }
 
-    private fun setStatus(text: String) {
-        getSharedPreferences("cfg", MODE_PRIVATE).edit().putString("status", text).apply()
+    private fun contentIntent(): PendingIntent = PendingIntent.getActivity(
+        this, 0, Intent(this, MainActivity::class.java),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
+    private fun fgNotification(text: String): Notification =
+        Notification.Builder(this, CH_SERVICE)
+            .setContentTitle("Scanner de volume Binance")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentIntent(contentIntent())
+            .setOngoing(true)
+            .build()
+
+    private fun updateForeground(text: String) {
+        getSystemService(NotificationManager::class.java).notify(1, fgNotification(text))
     }
 
-    private fun fetchKlines(interval: String): JSONArray {
-        val url = URL(
-            "https://api.binance.com/api/v3/klines?symbol=$SYMBOL&interval=$interval&limit=${WINDOW + 2}"
-        )
-        val conn = url.openConnection() as HttpURLConnection
-        conn.connectTimeout = 10_000
-        conn.readTimeout = 10_000
+    private fun notifyHits(hits: List<ScanRow>, cfg: Config) {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (cfg.notifMode == "SUMMARY") {
+            val style = Notification.InboxStyle()
+            for (h in hits.take(5)) {
+                style.addLine("${h.symbol}  ${fmtRatio(h.ratio)}  ${fmtPrice(h.price)}  ${fmtPct(h.changePct)}")
+            }
+            if (hits.size > 5) style.setSummaryText("+${hits.size - 5} autres")
+            val top = hits.first()
+            val n = Notification.Builder(this, CH_ALERT)
+                .setContentTitle("📈 ${hits.size} pic(s) de volume")
+                .setContentText("${top.symbol} ${fmtRatio(top.ratio)} en tête")
+                .setStyle(style)
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setContentIntent(contentIntent())
+                .setAutoCancel(true)
+                .build()
+            nm.notify(alertId++, n)
+        } else {
+            for (h in hits.take(10)) {
+                val arrow = if (h.changePct >= 0) "▲" else "▼"
+                val text = "Prix ${fmtPrice(h.price)} $arrow ${fmtPct(h.changePct)} · Vol ${fmtVol(h.volUsdt)} USDT"
+                val n = Notification.Builder(this, CH_ALERT)
+                    .setContentTitle("📈 ${h.symbol} ${fmtRatio(h.ratio)} volume")
+                    .setContentText(text)
+                    .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                    .setContentIntent(contentIntent())
+                    .setAutoCancel(true)
+                    .build()
+                nm.notify(alertId++, n)
+            }
+        }
+    }
+
+    // ---------- Boucle principale ----------
+
+    private fun loop() {
+        val clock = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        var lastKey = ""
+        while (running) {
+            var pause = 5_000L
+            try {
+                val cfg = Prefs.load(this)
+                val ms = intervalMs(cfg.interval)
+                val now = System.currentTimeMillis()
+                val closedOpen = (now / ms) * ms - ms          // ouverture de la dernière bougie clôturée
+                val key = "${cfg.interval}:$closedOpen"
+                val forced = forceScan
+                if (forced || (key != lastKey && now >= closedOpen + ms + 3_000)) {
+                    forceScan = false
+                    scan(cfg, clock)
+                    lastKey = key
+                }
+            } catch (e: InterruptedException) {
+                return
+            } catch (e: Exception) {
+                ScanState.status.value = "Erreur : ${e.message}"
+                pause = 30_000L
+            }
+            try {
+                Thread.sleep(pause)
+            } catch (e: InterruptedException) {
+                return
+            }
+        }
+    }
+
+    private fun scan(cfg: Config, clock: SimpleDateFormat) {
+        ScanState.status.value = "Analyse en cours…"
+        val (cands, total) = candidates(cfg)
+        val errors = AtomicInteger(0)
+        val rows = analyzeAll(cands, cfg.interval, errors)
+        if (cands.isNotEmpty() && errors.get() > cands.size / 2) {
+            throw IOException("trop d'erreurs (limite Binance ou réseau), nouvelle tentative…")
+        }
+
+        val now = System.currentTimeMillis()
+        val sorted = rows.sortedByDescending { it.ratio }
+        val threshold = if (cfg.volThreshold < 1.05) 1.05 else cfg.volThreshold
+        val hits = sorted.filter { r ->
+            r.ratio >= threshold &&
+                (cfg.mode == "VOLUME" || abs(r.changePct) >= cfg.priceThreshold) &&
+                lastCandle[r.symbol] != r.candle &&
+                (now - (lastAlertAt[r.symbol] ?: 0L)) >= cfg.cooldownMin * 60_000L
+        }
+        for (h in hits) {
+            lastCandle[h.symbol] = h.candle
+            lastAlertAt[h.symbol] = now
+        }
+
+        ScanState.rows.value = sorted
+        ScanState.monitored.value = cands.size
+        ScanState.totalPairs.value = total
+        ScanState.lastScan.value = now
+        val stamp = clock.format(Date(now))
+        ScanState.status.value = "Dernier scan à $stamp · ${hits.size} alerte(s)"
+        updateForeground("${cands.size} cryptos surveillées · scan $stamp")
+
+        if (hits.isNotEmpty()) {
+            History.add(this, hits.map { AlertItem(now, it.symbol, it.price, it.changePct, it.ratio, it.volUsdt) })
+            notifyHits(hits, cfg)
+        }
+    }
+
+    // ---------- API Binance (publique, sans clé) ----------
+
+    private fun http(url: String): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 20_000
         try {
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            return JSONArray(body)
+            val code = conn.responseCode
+            if (code == 429 || code == 418) throw IOException("limite Binance atteinte (HTTP $code)")
+            if (code != 200) throw IOException("HTTP $code")
+            return conn.inputStream.bufferedReader().use { it.readText() }
         } finally {
             conn.disconnect()
         }
     }
 
-    private fun loop() {
-        val prefs = getSharedPreferences("cfg", MODE_PRIVATE)
-        var lastNotified = 0L
-        val hour = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    /** Une seule requête pour toutes les paires, puis filtres prix / volume / listes. */
+    private fun candidates(cfg: Config): Pair<List<Cand>, Int> {
+        val arr = JSONArray(http("https://api.binance.com/api/v3/ticker/24hr?type=MINI"))
+        val favs = ArrayList<Cand>()
+        val others = ArrayList<Cand>()
+        var total = 0
+        for (i in 0 until arr.length()) {
+            val t = arr.getJSONObject(i)
+            val sym = t.getString("symbol")
+            if (!sym.endsWith("USDT")) continue
+            val base = sym.removeSuffix("USDT")
+            total++
+            if (base in STABLE || base in cfg.excluded) continue
+            val price = t.optString("lastPrice").toDoubleOrNull() ?: continue
+            val qv = t.optString("quoteVolume").toDoubleOrNull() ?: continue
+            if (price <= 0.0 || qv <= 0.0) continue
+            if (base in cfg.favorites) {
+                favs.add(Cand(sym, base, price, qv))
+            } else if (price >= cfg.priceMin && price <= cfg.priceMax && qv >= cfg.minVol24h) {
+                others.add(Cand(sym, base, price, qv))
+            }
+        }
+        others.sortByDescending { it.qv24 }
+        val room = (cfg.maxSymbols - favs.size).coerceAtLeast(0)
+        return Pair(favs + others.take(room), total)
+    }
 
-        while (running) {
-            try {
-                val interval = prefs.getString("interval", "5m") ?: "5m"
-                val threshold = prefs.getFloat("threshold", 2.5f).toDouble()
-                val notifyDrop = prefs.getBoolean("drop", false)
-
-                val arr = fetchKlines(interval)
-                val last = arr.getJSONArray(arr.length() - 2) // dernière bougie clôturée
-                val openTime = last.getLong(0)
-                val open = last.getString(1).toDouble()
-                val close = last.getString(4).toDouble()
-                val volBtc = last.getString(5).toDouble()
-                val volUsdt = last.getString(7).toDouble()
-
-                var sum = 0.0
-                val n = arr.length() - 2
-                for (i in 0 until n) sum += arr.getJSONArray(i).getString(5).toDouble()
-                val avg = sum / n
-                val ratio = if (avg > 0) volBtc / avg else 0.0
-                val change = (close - open) / open * 100
-
-                setStatus(
-                    "Dernière vérification : ${hour.format(Date())}\n" +
-                    "Ratio volume : x%.2f (seuil x%.1f)\nPrix : %,.2f USDT".format(ratio, threshold, close)
-                )
-
-                if (openTime != lastNotified) {
-                    val arrow = if (change >= 0) "▲" else "▼"
-                    val details = "Volume : %.2f BTC (%,.0f USDT) | x%.2f de la moyenne | Prix : %,.2f %s %+.2f%%"
-                        .format(volBtc, volUsdt, ratio, close, arrow, change)
-
-                    if (ratio >= threshold) {
-                        alert("📈 Pic de volume $SYMBOL", details)
-                        lastNotified = openTime
-                    } else if (notifyDrop && ratio <= 1 / threshold) {
-                        alert("📉 Chute de volume $SYMBOL", details)
-                        lastNotified = openTime
+    private fun analyzeAll(cands: List<Cand>, interval: String, errors: AtomicInteger): List<ScanRow> {
+        val pool = Executors.newFixedThreadPool(8)
+        try {
+            val futures = cands.map { c ->
+                pool.submit(Callable<ScanRow?> {
+                    try {
+                        analyze(c, interval)
+                    } catch (e: Exception) {
+                        errors.incrementAndGet()
+                        null
                     }
-                }
-            } catch (e: InterruptedException) {
-                return
-            } catch (e: Exception) {
-                setStatus("Erreur : ${e.message}")
+                })
             }
-
-            try {
-                Thread.sleep(POLL_MS)
-            } catch (e: InterruptedException) {
-                return
-            }
+            return futures.mapNotNull { it.get() }
+        } finally {
+            pool.shutdownNow()
         }
     }
 
-    private fun alert(title: String, text: String) {
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-        val n = Notification.Builder(this, CH_ALERT)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setStyle(Notification.BigTextStyle().bigText(text))
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .build()
-        getSystemService(NotificationManager::class.java).notify(alertId++, n)
+    private fun analyze(c: Cand, interval: String): ScanRow? {
+        val url = "https://api.binance.com/api/v3/klines?symbol=${c.symbol}&interval=$interval&limit=${WINDOW + 2}"
+        val arr = JSONArray(http(url))
+        val n = arr.length() - 2                  // la dernière bougie (en cours) est ignorée
+        if (n < 5) return null
+        val last = arr.getJSONArray(n)            // dernière bougie clôturée
+        val open = last.getString(1).toDouble()
+        val close = last.getString(4).toDouble()
+        val qv = last.getString(7).toDouble()
+        var sum = 0.0
+        for (i in 0 until n) sum += arr.getJSONArray(i).getString(7).toDouble()
+        val avg = sum / n
+        if (avg <= 0.0 || open <= 0.0) return null
+        return ScanRow(c.base, c.price, (close - open) / open * 100.0, qv / avg, qv, last.getLong(0))
     }
 }
