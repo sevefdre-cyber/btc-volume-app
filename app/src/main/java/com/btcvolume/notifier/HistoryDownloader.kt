@@ -209,7 +209,8 @@ object HistoryDownloader {
                         var entry = zis.nextEntry
                         while (entry != null) {
                             val br = BufferedReader(InputStreamReader(zis))
-                            br.forEachLine { line ->
+                            while (true) {
+                                val line = br.readLine() ?: break
                                 val p = line.split(',')
                                 if (p.size >= 6) {
                                     var t = p[0].toLongOrNull()
