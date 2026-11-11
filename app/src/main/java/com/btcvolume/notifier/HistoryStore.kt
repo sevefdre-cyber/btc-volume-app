@@ -98,6 +98,7 @@ object HistState {
     val done = MutableStateFlow(0)
     val total = MutableStateFlow(0)
     val errors = MutableStateFlow(0)
+    val lastError = MutableStateFlow("")
     val info = MutableStateFlow("")
 
     @Volatile

@@ -1038,6 +1038,7 @@ fun HistoryCard(
     val total by HistState.total.collectAsState()
     val errors by HistState.errors.collectAsState()
     val info by HistState.info.collectAsState()
+    val lastErr by HistState.lastError.collectAsState()
 
     LaunchedEffect(running) {
         withContext(Dispatchers.IO) { HistState.refresh(ctx) }
@@ -1116,6 +1117,10 @@ fun HistoryCard(
                     ) { Text("Arrêter") }
                 }
                 if (hStatus.isNotEmpty()) Muted(hStatus + progressTxt)
+                if (errors > 0) {
+                    Muted("Une erreur correspond à un fichier (une crypto dans une taille de bougie) qui n'a pas pu être téléchargé. Quelques erreurs sont normales (cryptos retirées de la cote) ; beaucoup d'erreurs signalent un problème de connexion.")
+                }
+                if (lastErr.isNotEmpty()) Muted("Dernière erreur : $lastErr")
                 OutlinedButton(
                     onClick = { confirmDelete = true },
                     enabled = !running,

@@ -29,6 +29,10 @@ import java.util.zip.ZipInputStream
 
 object HistoryDownloader {
     private val INTERVALS = listOf("1h", "15m", "5m")
+    private val archiveFails = AtomicInteger(0)
+
+    @Volatile
+    private var archiveDown = false
 
     private fun onWifi(c: Context): Boolean {
         val cm = c.getSystemService(ConnectivityManager::class.java)
@@ -66,6 +70,9 @@ object HistoryDownloader {
         HistState.errors.value = 0
         HistState.done.value = 0
         HistState.status.value = "Liste des cryptos…"
+        HistState.lastError.value = ""
+        archiveFails.set(0)
+        archiveDown = false
         val bases = universe(count)
         HistoryStore.saveSymbols(c, bases)
 
@@ -95,6 +102,7 @@ object HistoryDownloader {
                             downloadOne(c, base, iv, if (iv == "5m") months5m else 12)
                         } catch (e: Exception) {
                             HistState.errors.value = errs.incrementAndGet()
+                            HistState.lastError.value = "$base $iv : ${e.message}"
                         }
                         val d = done.incrementAndGet()
                         HistState.done.value = d
@@ -139,14 +147,28 @@ object HistoryDownloader {
             cal.set(Calendar.MILLISECOND, 0)
             val monthStart = cal.timeInMillis
             var found = false
-            for (m in months downTo 1) {
-                if (HistState.cancel) return
-                val c2 = cal.clone() as Calendar
-                c2.add(Calendar.MONTH, -m)
-                val got = fetchMonth(pair, iv, c2.get(Calendar.YEAR), c2.get(Calendar.MONTH) + 1)
-                if (got != null && got.isNotEmpty()) {
-                    all.addAll(got)
-                    found = true
+            if (!archiveDown) {
+                try {
+                    for (m in months downTo 1) {
+                        if (HistState.cancel) return
+                        val c2 = cal.clone() as Calendar
+                        c2.add(Calendar.MONTH, -m)
+                        val got = fetchMonth(pair, iv, c2.get(Calendar.YEAR), c2.get(Calendar.MONTH) + 1)
+                        if (got != null && got.isNotEmpty()) {
+                            all.addAll(got)
+                            found = true
+                        }
+                    }
+                    archiveFails.set(0)
+                } catch (e: Exception) {
+                    // archives inaccessibles : on bascule sur l'API pour cette crypto
+                    HistState.lastError.value = "Archives : ${e.message}"
+                    all.clear()
+                    found = false
+                    if (archiveFails.incrementAndGet() >= 4) {
+                        archiveDown = true
+                        HistState.status.value = "Archives inaccessibles : passage par l'API (plus lent)"
+                    }
                 }
             }
             // si les archives sont inaccessibles, on retombe sur l'API pour toute la période
@@ -171,12 +193,13 @@ object HistoryDownloader {
         val mm = if (mo < 10) "0$mo" else "$mo"
         val url = "https://data.binance.vision/data/spot/monthly/klines/$pair/$iv/$pair-$iv-$y-$mm.zip"
         var lastErr: Exception? = null
-        for (attempt in 0 until 3) {
+        for (attempt in 0 until 2) {
             if (HistState.cancel) return null
             try {
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.connectTimeout = 15_000
                 conn.readTimeout = 60_000
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) VolumeScanner/1.0")
                 try {
                     val code = conn.responseCode
                     if (code == 404) return null
@@ -211,17 +234,39 @@ object HistoryDownloader {
                 }
             } catch (e: Exception) {
                 lastErr = e
-                Thread.sleep(1_500L * (attempt + 1))
+                Thread.sleep(1_000L)
             }
         }
         throw lastErr ?: IOException("échec du téléchargement")
     }
 
+    /** Appel API avec nouvel essai : pause si la limite de Binance est atteinte, reprise après erreur réseau. */
+    private fun apiCandles(pair: String, iv: String, end: Long?): List<Candle> {
+        var attempt = 0
+        while (true) {
+            if (HistState.cancel) return emptyList()
+            try {
+                return Binance.candles(pair, iv, 1000, end)
+            } catch (e: ApiException) {
+                if (e.code == -1003 && attempt < 5) {
+                    HistState.status.value = "Limite Binance atteinte : pause…"
+                    Thread.sleep(15_000L * (attempt + 1))
+                } else {
+                    throw e
+                }
+            } catch (e: IOException) {
+                if (attempt >= 2) throw e
+                Thread.sleep(2_000L)
+            }
+            attempt++
+        }
+    }
+
     /** Bougies récentes via l'API, de [from] jusqu'à maintenant (bougie en cours exclue). */
     private fun fetchTail(pair: String, iv: String, from: Long, ms: Long): List<Candle> {
-        var all = Binance.candles(pair, iv, 1000)
+        var all = apiCandles(pair, iv, null)
         while (all.isNotEmpty() && all.first().time > from && !HistState.cancel) {
-            val older = Binance.candles(pair, iv, 1000, all.first().time - 1)
+            val older = apiCandles(pair, iv, all.first().time - 1)
             if (older.isEmpty()) break
             all = older + all
         }
