@@ -367,6 +367,7 @@ fun TradeTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (
 
         item { JournalCard(closedList, tc) }
         item { BacktestCard(cfg, tc, update, updateTc) }
+        item { HistoryCard(cfg, tc, update, updateTc) }
 
         item { Text("Jetons sélectionnés par les alertes", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) }
         item {
@@ -939,6 +940,205 @@ fun BacktestCard(
                     Muted("Avec autant de combinaisons, certaines paraissent bonnes par pur hasard. Une combinaison n'est crédible que si elle reste positive en validation, avec assez de trades, et idéalement si vous la retestez plus tard sur une nouvelle période.")
                 }
                 Muted("Hypothèses : signal à la clôture de la bougie, entrée à l'ouverture suivante, frais 0,2 % aller-retour, glissement ${fmtNum(tc.simSlippagePct)} %, SL supposé touché avant le TP dans une même bougie. Limite de positions, filtre Bitcoin et profondeur du carnet d'ordres non simulés.")
+            }
+        }
+    }
+}
+
+
+// ---------------------------------------------------------------- Historique local et backtest hors ligne
+
+fun comboLabel(c: Combo): String {
+    val range = if (c.maxR > 0) "${fmtNum(c.minR)}×–${fmtNum(c.maxR)}×" else "≥ ${fmtNum(c.minR)}×"
+    val chg = if (c.minChg > 0) " · hausse ≥ ${fmtNum(c.minChg)} %" else ""
+    return "${c.interval}$chg · volume $range · TP ${fmtNum(c.tp)} % / SL ${fmtNum(c.sl)} % · tendance ${if (c.trend) "✓" else "–"} · BTC ${if (c.btc) "✓" else "–"}"
+}
+
+fun aggLine(a: Agg): String =
+    "${a.n} trades · ${fmtPct(a.avg)} par trade · PF ${fmtPf(a.pf)} · réussite ${a.winPct} %"
+
+fun fmtEff(d: Double): String = if (d.isNaN()) "–" else fmtPct(d)
+
+@Composable
+fun OfflineResultCard(
+    r: OffResult,
+    cfg: Config,
+    tc: TradeConfig,
+    update: (Config) -> Unit,
+    updateTc: (TradeConfig) -> Unit
+) {
+    Muted("${r.combos} combinaisons · ${r.symbols} cryptos${r.note}")
+    Text("Walk-forward : optimiser, puis vérifier sur la période suivante", fontWeight = FontWeight.SemiBold)
+    r.folds.forEachIndexed { i, f ->
+        val ch = f.chosen
+        val tr = f.train
+        val va = f.valid
+        if (ch == null || tr == null || va == null) {
+            Muted("Période ${i + 1} : aucune combinaison avec assez de trades.")
+        } else {
+            Text("Période ${i + 1} · ${comboLabel(ch)}", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Muted("Optimisation : ${aggLine(tr)}")
+            Text("Validation : ${aggLine(va)}", color = pnlColor(va.avg), fontSize = 12.sp)
+        }
+    }
+    val p = r.pooled
+    if (p.n > 0) {
+        Text("Total validé : ${aggLine(p)}", color = pnlColor(p.avg), fontWeight = FontWeight.Bold)
+        Muted("Sorties : TP ${p.tp} · SL ${p.sl} · durée max ${p.dur}")
+        val verdict = when {
+            p.n < 100 -> "? trop peu de trades validés pour conclure"
+            p.avg > 0 && p.pf > 1.1 -> "✓ la méthode reste positive hors échantillon"
+            else -> "✗ la méthode « optimiser puis trader » n'est pas rentable hors échantillon"
+        }
+        Text(verdict, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+    }
+
+    Muted("Effet des filtres (rendement moyen par trade, moyenne des combinaisons) · tendance : avec ${fmtEff(r.effect[0])} / sans ${fmtEff(r.effect[1])} · BTC : avec ${fmtEff(r.effect[2])} / sans ${fmtEff(r.effect[3])}")
+
+    Text("Meilleures combinaisons sur toute la période", fontWeight = FontWeight.SemiBold)
+    if (r.tops.isEmpty()) Muted("Aucune combinaison avec au moins 200 trades.")
+    r.tops.forEachIndexed { i, t ->
+        AppCard {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("#${i + 1} · ${comboLabel(t.combo)}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(aggLine(t.all), color = pnlColor(t.all.avg), fontSize = 12.sp)
+                Muted("Tranches positives : ${t.posBuckets}/${t.usedBuckets} · sorties TP ${t.all.tp} · SL ${t.all.sl} · durée max ${t.all.dur}")
+                TextButton(onClick = {
+                    val c = t.combo
+                    update(cfg.copy(interval = c.interval, volThreshold = c.minR, volMax = c.maxR, trendFilter = c.trend, btcFilter = c.btc, explosionMin = c.minChg))
+                    updateTc(tc.copy(tpPct = c.tp, slPct = c.sl, autoMinRatio = c.minR))
+                }) { Text("Appliquer ces réglages") }
+            }
+        }
+    }
+    Muted("Limites : biais de survie (seules les cryptos encore cotées sont testées, les jetons effondrés puis retirés manquent), filtres de prix et de volume 24 h non appliqués historiquement, glissement uniforme, SL supposé touché avant le TP dans une même bougie. Un résultat n'est crédible que s'il reste positif en validation et sur la majorité des tranches.")
+}
+
+@Composable
+fun HistoryCard(
+    cfg: Config,
+    tc: TradeConfig,
+    update: (Config) -> Unit,
+    updateTc: (TradeConfig) -> Unit
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var open by remember { mutableStateOf(false) }
+    var count by remember { mutableStateOf(300.0) }
+    var wifiOnly by remember { mutableStateOf(true) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+    var hold by remember { mutableStateOf(48.0) }
+    var nSym by remember { mutableStateOf(300.0) }
+    var result by remember { mutableStateOf<OffResult?>(null) }
+    val running by HistState.running.collectAsState()
+    val hStatus by HistState.status.collectAsState()
+    val done by HistState.done.collectAsState()
+    val total by HistState.total.collectAsState()
+    val errors by HistState.errors.collectAsState()
+    val info by HistState.info.collectAsState()
+
+    LaunchedEffect(running) {
+        withContext(Dispatchers.IO) { HistState.refresh(ctx) }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Supprimer l'historique ?") },
+            text = { Text("Les bougies téléchargées seront effacées du téléphone. Vous pourrez les télécharger à nouveau.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    HistoryStore.clear(ctx)
+                    HistState.refresh(ctx)
+                    HistState.status.value = ""
+                }) { Text("Supprimer", color = DownColor) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Annuler") } }
+        )
+    }
+
+    val runBt: (List<Combo>) -> Unit = { combos ->
+        busy = true
+        result = null
+        scope.launch {
+            try {
+                val r = withContext(Dispatchers.IO) {
+                    OfflineBacktest.run(ctx, cfg, tc, combos, nSym.toInt().coerceIn(5, 500), hold.toInt(), 90) { status = it }
+                }
+                result = r
+                status = "Terminé."
+            } catch (e: Exception) {
+                status = "Échec : ${e.message}"
+            }
+            busy = false
+        }
+    }
+
+    val progressTxt = if (total > 0) {
+        " · $done/$total" + (if (errors > 0) " · $errors erreur(s)" else "")
+    } else ""
+
+    AppCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { open = !open },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🗄️ Historique local et backtest 12 mois", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                Text(if (open) "▴" else "▾", fontSize = 18.sp)
+            }
+            if (open) {
+                Muted("Télécharge une fois l'historique des cryptos les plus échangées : 12 mois en bougies de 15 min et 1 h, 3 mois en 5 min. Ensuite, les backtests tournent sans réseau et sur une bien plus longue période.")
+                Text("1. Historique sur le téléphone", fontWeight = FontWeight.SemiBold)
+                Muted(if (info.isEmpty()) "Aucun historique téléchargé." else info)
+                NumField("Nombre de cryptos (les plus liquides)", count) { count = it }
+                SwitchRow(
+                    "Wi-Fi seulement",
+                    "Le téléchargement représente de l'ordre de 0,5 Go. Il continue en arrière-plan et reprend s'il est interrompu.",
+                    wifiOnly
+                ) { wifiOnly = it }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { HistoryService.start(ctx, count.toInt().coerceIn(20, 500), wifiOnly, 3) },
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Télécharger") }
+                    OutlinedButton(
+                        onClick = { HistoryService.stop(ctx) },
+                        enabled = running,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Arrêter") }
+                }
+                if (hStatus.isNotEmpty()) Muted(hStatus + progressTxt)
+                OutlinedButton(
+                    onClick = { confirmDelete = true },
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Supprimer l'historique") }
+
+                Text("2. Backtest sur l'historique local", fontWeight = FontWeight.SemiBold)
+                Muted("Méthode « walk-forward » : la meilleure combinaison est choisie sur la période passée, puis jugée sur la période suivante, trois fois de suite. C'est la mesure la plus honnête de ce que donnerait « optimiser puis trader ».")
+                NumField("Nombre de cryptos testées", nSym) { nSym = it }
+                NumField("Durée maximale d'un trade (bougies)", hold) { hold = it }
+                Button(
+                    onClick = { runBt(OfflineBacktest.volumeCombos()) },
+                    enabled = !busy && !running,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (busy) "Calcul en cours…" else "Balayage volume (12 mois)") }
+                OutlinedButton(
+                    onClick = { runBt(OfflineBacktest.explosionCombos()) },
+                    enabled = !busy && !running,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Balayage explosion de prix (12 mois)") }
+                if (status.isNotEmpty()) Muted(status)
+                val r = result
+                if (r != null) OfflineResultCard(r, cfg, tc, update, updateTc)
             }
         }
     }

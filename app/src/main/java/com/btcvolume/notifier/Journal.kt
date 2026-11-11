@@ -193,9 +193,9 @@ object Backtester {
     }
 
     /** État de Bitcoin sur la grille de bougies de 15 min (mêmes définitions que le scan en direct). */
-    private fun btcGrid(): BtcGrid? {
+    fun btcGrid(csIn: List<Candle>? = null): BtcGrid? {
         return try {
-            val cs = Binance.candles("BTCUSDT", "15m", 1000)
+            val cs = csIn ?: Binance.candles("BTCUSDT", "15m", 1000)
             val n = cs.size
             val chg = DoubleArray(n)
             val trend = DoubleArray(n)
