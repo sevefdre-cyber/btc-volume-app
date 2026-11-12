@@ -306,7 +306,7 @@ class HistoryService : Service() {
         Notification.Builder(this, VolumeService.CH_SERVICE)
             .setContentTitle("Téléchargement de l'historique")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setSmallIcon(R.drawable.ic_stat_scan)
             .setOngoing(true)
             .build()
 

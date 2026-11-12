@@ -34,6 +34,7 @@ import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 
+@Composable
 fun pnlColor(v: Double): Color = if (v >= 0) UpColor else DownColor
 
 @Composable
@@ -132,7 +133,10 @@ fun PositionCard(p: Position, price: Double?, onClose: (() -> Unit)?) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("${p.symbol}/USDT · ${envLabel(p.mode)}", fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TokenLink(p.symbol, 16.sp, "/USDT")
+                    Text(" · ${envLabel(p.mode)}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
                 Text(
                     if (p.status == "OPEN") "OUVERTE" else "CLÔTURÉE · ${p.closeReason}",
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.primary
@@ -293,13 +297,21 @@ fun TradeTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (
                         tc.enabled
                     ) { updateTc(tc.copy(enabled = it)) }
                     if (tc.env == "REAL") {
-                        Text("⚠️ Mode RÉEL : de l'argent réel est engagé.", color = DownColor, fontWeight = FontWeight.SemiBold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(OutIcons.Warning, contentDescription = null, tint = DownColor, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Mode RÉEL : de l'argent réel est engagé.", color = DownColor, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                     Button(
                         onClick = { confirmPanic = true },
                         colors = ButtonDefaults.buttonColors(containerColor = DownColor, contentColor = Color.White),
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("🛑 ARRÊT D'URGENCE") }
+                    ) {
+                        Icon(OutIcons.Power, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("ARRÊT D'URGENCE")
+                    }
                     if (msg.isNotEmpty()) Muted(msg)
                 }
             }
@@ -315,8 +327,8 @@ fun TradeTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("⚙️ Stratégie & configuration spot", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                        Text(if (strategyOpen) "▴" else "▾", fontSize = 18.sp)
+                        IconTitle(OutIcons.Tune, "Stratégie & configuration spot", MaterialTheme.colorScheme.primary)
+                        Icon(if (strategyOpen) OutIcons.Less else OutIcons.More, contentDescription = null)
                     }
                     if (strategyOpen) {
                         Muted("Achat au marché du montant fixé, puis vente automatique par un ordre OCO placé sur Binance : take-profit au-dessus, stop-loss en dessous. Si l'OCO est refusé, la position est revendue aussitôt.")
@@ -404,14 +416,14 @@ fun TradeTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(s, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        TokenLink(s)
                         Muted("Prix ${if (live != null) fmtPrice(live) else fmtPrice(a.price)} USDT")
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         RatioBadge(a.ratio)
                         Text(fmtPct(a.changePct), color = pnlColor(a.changePct), fontSize = 13.sp)
                     }
-                    Text("›", fontSize = 24.sp, modifier = Modifier.padding(start = 10.dp))
+                    Icon(OutIcons.Chevron, contentDescription = null, modifier = Modifier.padding(start = 6.dp))
                 }
             }
         }
@@ -508,7 +520,11 @@ fun TokenDetail(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = onBack) { Text("← Retour") }
+            TextButton(onClick = onBack) {
+                Icon(OutIcons.Back, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Retour")
+            }
             EnvBadge(tc.env)
         }
         Row(
@@ -516,7 +532,7 @@ fun TokenDetail(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Title("$symbol/USDT")
+            TokenLink(symbol, 22.sp, "/USDT")
             if (live != null) Text(fmtPrice(live), fontWeight = FontWeight.Bold, fontSize = 20.sp)
         }
 
@@ -724,8 +740,8 @@ fun JournalCard(closed: List<Position>, tc: TradeConfig) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("📈 Journal & statistiques", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                Text(if (open) "▴" else "▾", fontSize = 18.sp)
+                IconTitle(OutIcons.Assess, "Journal & statistiques", MaterialTheme.colorScheme.primary)
+                Icon(if (open) OutIcons.Less else OutIcons.More, contentDescription = null)
             }
             if (open) {
                 if (st == null) {
@@ -830,8 +846,8 @@ fun BacktestCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("🧪 Backtest et balayage", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                Text(if (open) "▴" else "▾", fontSize = 18.sp)
+                IconTitle(OutIcons.Science, "Backtest et balayage", MaterialTheme.colorScheme.primary)
+                Icon(if (open) OutIcons.Less else OutIcons.More, contentDescription = null)
             }
             if (open) {
                 Muted("Rejoue vos règles (filtres de scan, intervalle de volume, TP, SL, glissement) sur l'historique récent des cryptos les plus échangées de votre sélection. L'historique est court (environ 3 jours en bougies de 5 min, 10 jours en 15 min) : avec peu de trades, le résultat est peu fiable.")
@@ -1091,8 +1107,8 @@ fun HistoryCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("🗄️ Historique local et backtest 12 mois", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                Text(if (open) "▴" else "▾", fontSize = 18.sp)
+                IconTitle(OutIcons.Storage, "Historique local et backtest 12 mois", MaterialTheme.colorScheme.primary)
+                Icon(if (open) OutIcons.Less else OutIcons.More, contentDescription = null)
             }
             if (open) {
                 Muted("Télécharge une fois l'historique des cryptos les plus échangées : 12 mois en bougies de 15 min et 1 h, 3 mois en 5 min. Ensuite, les backtests tournent sans réseau et sur une bien plus longue période.")

@@ -9,6 +9,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         History.load(this)
         Positions.load(this)
+        ThemeState.mode.value = Prefs.load(this).themeMode
         setContent {
             AppTheme {
                 MainScreen()

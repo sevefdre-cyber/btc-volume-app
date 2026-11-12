@@ -1,6 +1,14 @@
 package com.btcvolume.notifier
 
 import android.Manifest
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.TextUnit
 import android.content.Intent
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -79,7 +87,13 @@ fun MainScreen() {
         if (Build.VERSION.SDK_INT >= 33) permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    val tabs = listOf("📊" to "Scanner", "🔔" to "Alertes", "💹" to "Trade", "⭐" to "Listes", "⚙️" to "Réglages")
+    val tabs = listOf(
+        Triple(OutIcons.Scan, FillIcons.Scan, "Scanner"),
+        Triple(OutIcons.Alerts, FillIcons.Alerts, "Alertes"),
+        Triple(OutIcons.Trade, FillIcons.Trade, "Trade"),
+        Triple(OutIcons.Star, FillIcons.Star, "Listes"),
+        Triple(OutIcons.Tune, FillIcons.Tune, "Réglages")
+    )
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -89,8 +103,15 @@ fun MainScreen() {
                     NavigationBarItem(
                         selected = tab == i,
                         onClick = { tab = i },
-                        icon = { Text(pair.first, fontSize = 20.sp) },
-                        label = { Text(pair.second) }
+                        icon = { Icon(if (tab == i) pair.second else pair.first, contentDescription = null) },
+                        label = { Text(pair.third) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     )
                 }
             }
@@ -119,6 +140,7 @@ fun AppCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
             contentColor = MaterialTheme.colorScheme.onSurface
         ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (LocalDark.current) 0.dp else 2.dp),
         content = content
     )
 }
@@ -136,6 +158,45 @@ fun RatioBadge(ratio: Double) {
             fontWeight = FontWeight.Bold,
             fontSize = 14.sp
         )
+    }
+}
+
+/** Nom d'un jeton : lien souligné vers sa page de trading sur Binance. */
+@Composable
+fun TokenLink(symbol: String, size: TextUnit = 16.sp, suffix: String = "") {
+    val uri = LocalUriHandler.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.clickable {
+            try {
+                uri.openUri("https://www.binance.com/fr/trade/${symbol}_USDT?type=spot")
+            } catch (e: Exception) {
+                // aucun navigateur disponible
+            }
+        }
+    ) {
+        Text(
+            symbol + suffix,
+            fontWeight = FontWeight.Bold,
+            fontSize = size,
+            textDecoration = TextDecoration.Underline
+        )
+        Spacer(Modifier.width(4.dp))
+        Icon(
+            OutIcons.Open,
+            contentDescription = "Ouvrir $symbol/USDT sur Binance",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size((size.value * 0.85f).dp)
+        )
+    }
+}
+
+@Composable
+fun IconTitle(icon: ImageVector, text: String, color: Color = MaterialTheme.colorScheme.onBackground) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(text, fontWeight = FontWeight.SemiBold, color = color)
     }
 }
 
@@ -230,7 +291,7 @@ fun ScanRowCard(r: ScanRow, cfg: Config, update: (Config) -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(r.symbol, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                TokenLink(r.symbol)
                 Muted("${fmtPrice(r.price)} USDT · Vol ${fmtVol(r.volUsdt)}")
             }
             Column(horizontalAlignment = Alignment.End) {
@@ -241,31 +302,25 @@ fun ScanRowCard(r: ScanRow, cfg: Config, update: (Config) -> Unit) {
                     fontSize = 13.sp
                 )
             }
-            Text(
-                if (fav) "★" else "☆",
-                fontSize = 22.sp,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .clickable {
-                        val f = if (fav) cfg.favorites - r.symbol else cfg.favorites + r.symbol
-                        update(cfg.copy(favorites = f))
-                    }
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
-            )
-            Text(
-                "🚫",
-                fontSize = 18.sp,
-                modifier = Modifier
-                    .clickable {
-                        update(
-                            cfg.copy(
-                                excluded = cfg.excluded + r.symbol,
-                                favorites = cfg.favorites - r.symbol
-                            )
-                        )
-                    }
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
-            )
+            IconButton(onClick = {
+                val f = if (fav) cfg.favorites - r.symbol else cfg.favorites + r.symbol
+                update(cfg.copy(favorites = f))
+            }) {
+                Icon(
+                    if (fav) FillIcons.Star else OutIcons.Star,
+                    contentDescription = if (fav) "Retirer des favoris" else "Ajouter aux favoris",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            IconButton(onClick = {
+                update(cfg.copy(excluded = cfg.excluded + r.symbol, favorites = cfg.favorites - r.symbol))
+            }) {
+                Icon(
+                    OutIcons.Block,
+                    contentDescription = "Exclure ${r.symbol}",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -304,7 +359,7 @@ fun AlertsTab() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(a.symbol, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        TokenLink(a.symbol)
                         Muted("${fmt.format(Date(a.time))} · ${fmtPrice(a.price)} USDT")
                         Muted("Vol bougie ${fmtVol(a.volUsdt)} USDT")
                     }
@@ -331,10 +386,10 @@ fun ListsTab(cfg: Config, update: (Config) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item { Title("Listes") }
-        item { Text("⭐ Favoris", fontWeight = FontWeight.SemiBold) }
+        item { IconTitle(FillIcons.Star, "Favoris") }
         item { Muted("Toujours surveillés, même hors du filtre de prix et de volume.") }
         item { SymbolEditor(cfg.favorites) { update(cfg.copy(favorites = it)) } }
-        item { Text("🚫 Exclusions", fontWeight = FontWeight.SemiBold) }
+        item { IconTitle(OutIcons.Block, "Exclusions") }
         item { Muted("Jamais surveillées, quoi qu'il arrive.") }
         item { SymbolEditor(cfg.excluded) { update(cfg.copy(excluded = it)) } }
     }
@@ -369,7 +424,7 @@ fun SymbolEditor(symbols: Set<String>, onChange: (Set<String>) -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(s, fontWeight = FontWeight.SemiBold)
+                    TokenLink(s)
                     TextButton(onClick = { onChange(symbols - s) }) { Text("Retirer") }
                 }
             }
@@ -442,6 +497,18 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Title("Réglages")
+
+        Section("Apparence") {
+            Text("Thème")
+            ChoiceRow(
+                listOf("SYSTEM" to "Automatique", "LIGHT" to "Clair", "DARK" to "Sombre"),
+                cfg.themeMode
+            ) {
+                ThemeState.mode.value = it
+                update(cfg.copy(themeMode = it))
+            }
+            Muted("Automatique suit le réglage de votre téléphone.")
+        }
 
         Section("Détection") {
             Text("Taille des bougies")

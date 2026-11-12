@@ -130,7 +130,7 @@ class VolumeService : Service() {
         Notification.Builder(this, CH_SERVICE)
             .setContentTitle("Scanner de volume Binance")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_scan)
             .setContentIntent(contentIntent())
             .setOngoing(true)
             .build()
@@ -151,10 +151,10 @@ class VolumeService : Service() {
             if (hits.size > 5) style.setSummaryText("+${hits.size - 5} autres")
             val top = hits.first()
             val n = Notification.Builder(this, CH_ALERT)
-                .setContentTitle("📈 ${hits.size} pic(s) de volume")
+                .setContentTitle("${hits.size} pic(s) de volume")
                 .setContentText("${top.symbol} ${fmtRatio(top.ratio)} en tête")
                 .setStyle(style)
-                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setSmallIcon(R.drawable.ic_stat_scan)
                 .setContentIntent(contentIntent())
                 .setAutoCancel(true)
                 .build()
@@ -166,9 +166,9 @@ class VolumeService : Service() {
                 val text = "Prix ${fmtPrice(h.price)} $arrow ${fmtPct(h.changePct)} · Vol ${fmtVol(h.volUsdt)} USDT"
                 val id = alertId++
                 val b = Notification.Builder(this, CH_ALERT)
-                    .setContentTitle("📈 ${h.symbol} ${fmtRatio(h.ratio)} volume")
+                    .setContentTitle("${h.symbol} ${fmtRatio(h.ratio)} volume")
                     .setContentText(text)
-                    .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                    .setSmallIcon(R.drawable.ic_stat_scan)
                     .setContentIntent(contentIntent())
                     .setAutoCancel(true)
                 if (semi) {
@@ -186,7 +186,7 @@ class VolumeService : Service() {
                     )
                     b.addAction(
                         Notification.Action.Builder(
-                            Icon.createWithResource(this, android.R.drawable.ic_menu_add),
+                            Icon.createWithResource(this, R.drawable.ic_stat_scan),
                             "Acheter ${fmtNum(tc.amountUsdt)} USDT", pi
                         ).build()
                     )
@@ -276,7 +276,7 @@ class VolumeService : Service() {
                 btcReason = BtcRules.reason(cfg, info)
                 ScanState.btc.value = "BTC · 1 h " + fmtPct(info.chg1h) + " · tendance " + fmtPct(info.trend) +
                     " · volatilité x" + String.format(Locale.US, "%.1f", info.shock) + " → " +
-                    (if (btcReason == null) "✅ favorable" else "⛔ " + btcReason)
+                    (if (btcReason == null) "favorable" else "défavorable : " + btcReason)
             } catch (e: Exception) {
                 ScanState.btc.value = "BTC indisponible : filtre ignoré"
             }

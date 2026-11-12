@@ -18,6 +18,7 @@ data class Config(
     val maxSymbols: Int = 300,
     val autoStart: Boolean = false,
     val wakeLock: Boolean = true,
+    val themeMode: String = "SYSTEM",       // SYSTEM, LIGHT ou DARK
     val maxWickPct: Double = 40.0,          // mèche haute max (% de la bougie), 100 = désactivé
     val max24hPct: Double = 50.0,           // hausse 24h max (%), 0 = désactivé
     val btcFilter: Boolean = true,
@@ -59,6 +60,7 @@ object Prefs {
             maxSymbols = p.getInt("maxSymbols", d.maxSymbols),
             autoStart = p.getBoolean("autoStart", d.autoStart),
             wakeLock = p.getBoolean("wakeLock", d.wakeLock),
+            themeMode = p.getString("themeMode", d.themeMode) ?: d.themeMode,
             maxWickPct = p.dbl("maxWickPct", d.maxWickPct),
             max24hPct = p.dbl("max24hPct", d.max24hPct),
             btcFilter = p.getBoolean("btcFilter", d.btcFilter),
@@ -92,6 +94,7 @@ object Prefs {
             .putInt("maxSymbols", cfg.maxSymbols)
             .putBoolean("autoStart", cfg.autoStart)
             .putBoolean("wakeLock", cfg.wakeLock)
+            .putString("themeMode", cfg.themeMode)
             .putString("maxWickPct", cfg.maxWickPct.toString())
             .putString("max24hPct", cfg.max24hPct.toString())
             .putBoolean("btcFilter", cfg.btcFilter)

@@ -1,12 +1,28 @@
 package com.btcvolume.notifier
 
+import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
+/** Mode d'apparence choisi : SYSTEM, LIGHT ou DARK. */
+object ThemeState {
+    val mode = mutableStateOf("SYSTEM")
+}
+
+val LocalDark = staticCompositionLocalOf { true }
+
+// Piste A : sombre pro (accent jaune)
 private val DarkColors = darkColorScheme(
     primary = Color(0xFFF0B90B),
     onPrimary = Color(0xFF111111),
@@ -23,29 +39,48 @@ private val DarkColors = darkColorScheme(
     outline = Color(0xFF474D57)
 )
 
+// Piste C : clair épuré (accent turquoise)
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF8A6A00),
+    primary = Color(0xFF0F766E),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFFFE9A8),
-    onPrimaryContainer = Color(0xFF3A2C00),
-    background = Color(0xFFFAFAFC),
-    onBackground = Color(0xFF1E2329),
+    primaryContainer = Color(0xFFE3F4F1),
+    onPrimaryContainer = Color(0xFF0B4F49),
+    background = Color(0xFFF6F7F9),
+    onBackground = Color(0xFF111827),
     surface = Color.White,
-    onSurface = Color(0xFF1E2329),
-    surfaceVariant = Color(0xFFF0F1F4),
-    onSurfaceVariant = Color(0xFF5E6673),
-    secondaryContainer = Color(0xFFE6E8EC),
-    onSecondaryContainer = Color(0xFF1E2329),
-    outline = Color(0xFFC7CBD1)
+    onSurface = Color(0xFF111827),
+    surfaceVariant = Color.White,
+    onSurfaceVariant = Color(0xFF5B6472),
+    secondaryContainer = Color(0xFFE3F4F1),
+    onSecondaryContainer = Color(0xFF0F766E),
+    outline = Color(0xFFD1D5DB)
 )
 
-val UpColor = Color(0xFF0ECB81)
-val DownColor = Color(0xFFF6465D)
+/** Hausse / baisse : teintes adaptées à chaque mode pour rester lisibles. */
+val UpColor: Color
+    @Composable get() = if (LocalDark.current) Color(0xFF0ECB81) else Color(0xFF047857)
+
+val DownColor: Color
+    @Composable get() = if (LocalDark.current) Color(0xFFF6465D) else Color(0xFFB91C1C)
 
 @Composable
 fun AppTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
-        content = content
-    )
+    val mode = ThemeState.mode.value
+    val dark = when (mode) {
+        "LIGHT" -> false
+        "DARK" -> true
+        else -> isSystemInDarkTheme()
+    }
+    val scheme = if (dark) DarkColors else LightColors
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.context as? Activity)?.window
+        if (window != null) {
+            window.statusBarColor = scheme.background.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !dark
+        }
+    }
+    CompositionLocalProvider(LocalDark provides dark) {
+        MaterialTheme(colorScheme = scheme, content = content)
+    }
 }

@@ -42,7 +42,7 @@ object Notifier {
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_scan)
             .setContentIntent(open)
             .setAutoCancel(true)
             .build()
@@ -68,7 +68,7 @@ class TradeActionReceiver : BroadcastReceiver() {
                 } else null
                 val r = Trader.buy(app, symbol, "SEMI", sig)
                 if (nid >= 0) app.getSystemService(NotificationManager::class.java).cancel(nid)
-                if (r.blocked) Notifier.post(app, "⚠️ Achat $symbol non effectué", r.message)
+                if (r.blocked) Notifier.post(app, "Achat $symbol non effectué", r.message)
             } finally {
                 pending.finish()
             }
@@ -120,11 +120,11 @@ object Trader {
             val p0 = if (tc.env == "SIM") buySim(c, tc, base, pair) else buyLive(c, tc, base, pair)
             val p = if (sig != null) tag(c, p0, sig) else p0
             val msg = "Achat $base à ${fmtPrice(p.entryPrice)} · TP ${fmtPrice(p.tp)} · SL ${fmtPrice(p.sl)} (${envLabel(tc.env)})"
-            if (source != "MANUAL") Notifier.post(c, "✅ Achat $base", msg)
+            if (source != "MANUAL") Notifier.post(c, "Achat $base exécuté", msg)
             TradeResult(true, msg)
         } catch (e: Exception) {
             val m = e.message ?: "erreur inconnue"
-            if (source != "MANUAL") Notifier.post(c, "⚠️ Achat $base échoué", m)
+            if (source != "MANUAL") Notifier.post(c, "Achat $base échoué", m)
             TradeResult(false, "Achat $base échoué : $m")
         }
     }
@@ -443,13 +443,8 @@ object Trader {
                     closed = Positions.get(c, p.id)
                 }
                 if (closed != null && closed.status == "CLOSED") {
-                    val icon = when (closed.closeReason) {
-                        "TP" -> "🎯"
-                        "SL" -> "🛑"
-                        else -> "ℹ️"
-                    }
-                    Notifier.post(
-                        c, "$icon ${closed.symbol} clôturé (${closed.closeReason})",
+                                        Notifier.post(
+                        c, "${closed.symbol} clôturé (${closed.closeReason})",
                         "Résultat estimé : ${fmtUsd(closed.pnl)} · ${envLabel(closed.mode)}"
                     )
                 }
