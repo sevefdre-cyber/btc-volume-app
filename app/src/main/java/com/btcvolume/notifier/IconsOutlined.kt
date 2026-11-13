@@ -1,6 +1,8 @@
 package com.btcvolume.notifier
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ArrowDropDown
+import androidx.compose.material.icons.outlined.ArrowDropUp
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.ChevronLeft
@@ -37,4 +39,6 @@ object OutIcons {
     val Storage: ImageVector = Icons.Outlined.Storage
     val Assess: ImageVector = Icons.Outlined.Assessment
     val Warning: ImageVector = Icons.Outlined.Warning
+    val Up: ImageVector = Icons.Outlined.ArrowDropUp
+    val Down: ImageVector = Icons.Outlined.ArrowDropDown
 }

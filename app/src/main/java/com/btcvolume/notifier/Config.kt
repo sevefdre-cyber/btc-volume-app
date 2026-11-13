@@ -18,6 +18,7 @@ data class Config(
     val maxSymbols: Int = 300,
     val autoStart: Boolean = false,
     val wakeLock: Boolean = true,
+    val liveOn: Boolean = true,              // prix en direct (WebSocket) quand l'écran est visible
     val themeMode: String = "SYSTEM",       // SYSTEM, LIGHT ou DARK
     val maxWickPct: Double = 40.0,          // mèche haute max (% de la bougie), 100 = désactivé
     val max24hPct: Double = 50.0,           // hausse 24h max (%), 0 = désactivé
@@ -60,6 +61,7 @@ object Prefs {
             maxSymbols = p.getInt("maxSymbols", d.maxSymbols),
             autoStart = p.getBoolean("autoStart", d.autoStart),
             wakeLock = p.getBoolean("wakeLock", d.wakeLock),
+            liveOn = p.getBoolean("liveOn", d.liveOn),
             themeMode = p.getString("themeMode", d.themeMode) ?: d.themeMode,
             maxWickPct = p.dbl("maxWickPct", d.maxWickPct),
             max24hPct = p.dbl("max24hPct", d.max24hPct),
@@ -94,6 +96,7 @@ object Prefs {
             .putInt("maxSymbols", cfg.maxSymbols)
             .putBoolean("autoStart", cfg.autoStart)
             .putBoolean("wakeLock", cfg.wakeLock)
+            .putBoolean("liveOn", cfg.liveOn)
             .putString("themeMode", cfg.themeMode)
             .putString("maxWickPct", cfg.maxWickPct.toString())
             .putString("max24hPct", cfg.max24hPct.toString())

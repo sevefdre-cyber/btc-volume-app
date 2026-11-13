@@ -225,12 +225,19 @@ fun ScannerTab(cfg: Config, update: (Config) -> Unit) {
     val monitored by ScanState.monitored.collectAsState()
     val total by ScanState.totalPairs.collectAsState()
     val btc by ScanState.btc.collectAsState()
+    var view by remember { mutableStateOf("SCAN") }
+    val liveMap by LiveState.ticks.collectAsState()
+    if (view == "RANK") {
+        RankingScreen { view = it }
+        return
+    }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item { Title("Volume Scanner") }
+        item { ChoiceRow(listOf("SCAN" to "Scan par bougie", "RANK" to "Classement live"), view) { view = it } }
         item {
             AppCard {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -278,27 +285,31 @@ fun ScannerTab(cfg: Config, update: (Config) -> Unit) {
         if (rows.isEmpty()) {
             item { Muted("Rien à afficher. Démarrez la surveillance : le premier scan prend quelques secondes.") }
         }
-        items(rows, key = { it.symbol }) { r -> ScanRowCard(r, cfg, update) }
+        items(rows, key = { it.symbol }) { r -> ScanRowCard(r, cfg, update, liveMap[r.symbol + "USDT"]) }
     }
 }
 
 @Composable
-fun ScanRowCard(r: ScanRow, cfg: Config, update: (Config) -> Unit) {
+fun ScanRowCard(r: ScanRow, cfg: Config, update: (Config) -> Unit, live: Tick?) {
     val fav = r.symbol in cfg.favorites
     AppCard {
         Row(
             Modifier.padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            val px = live?.price ?: r.price
+            val candlePct = if (live != null && r.curOpen > 0.0) (live.price - r.curOpen) / r.curOpen * 100.0 else r.changePct
+            val pct24 = if (live != null && live.open24 > 0.0) (live.price - live.open24) / live.open24 * 100.0 else null
             Column(Modifier.weight(1f)) {
                 TokenLink(r.symbol)
-                Muted("${fmtPrice(r.price)} USDT · Vol ${fmtVol(r.volUsdt)}")
+                Muted("${fmtPrice(px)} USDT · Vol ${fmtVol(r.volUsdt)}")
+                if (pct24 != null) Muted("24 h ${fmtPct(pct24)}")
             }
             Column(horizontalAlignment = Alignment.End) {
                 RatioBadge(r.ratio)
                 Text(
-                    fmtPct(r.changePct),
-                    color = if (r.changePct >= 0) UpColor else DownColor,
+                    fmtPct(candlePct),
+                    color = if (candlePct >= 0) UpColor else DownColor,
                     fontSize = 13.sp
                 )
             }
@@ -508,6 +519,17 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc
                 update(cfg.copy(themeMode = it))
             }
             Muted("Automatique suit le réglage de votre téléphone.")
+        }
+
+        Section("Données en direct") {
+            SwitchRow(
+                "Prix en direct (WebSocket)",
+                "Met à jour prix et pourcentages chaque seconde quand l'écran est visible, et alimente le classement. Consomme des données : Wi-Fi conseillé.",
+                cfg.liveOn
+            ) {
+                update(cfg.copy(liveOn = it))
+                if (it) LiveFeed.acquire(ctx, "ui") else LiveFeed.release("ui")
+            }
         }
 
         Section("Détection") {

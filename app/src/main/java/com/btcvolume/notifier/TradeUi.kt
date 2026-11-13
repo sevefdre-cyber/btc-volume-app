@@ -177,7 +177,13 @@ fun TradeTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf<String?>(null) }
-    var prices by remember { mutableStateOf<Map<String, Double>>(emptyMap()) }
+    var pricesRest by remember { mutableStateOf<Map<String, Double>>(emptyMap()) }
+    val liveMap by LiveState.ticks.collectAsState()
+    val prices: Map<String, Double> = remember(pricesRest, liveMap) {
+        val m = HashMap(pricesRest)
+        for ((k, t) in liveMap) m[k] = t.price
+        m
+    }
     val positions by Positions.items.collectAsState()
     val alerts by History.items.collectAsState()
     var msg by remember { mutableStateOf("") }
@@ -189,7 +195,7 @@ fun TradeTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (
     LaunchedEffect(Unit) {
         while (true) {
             try {
-                prices = withContext(Dispatchers.IO) { Binance.allPrices() }
+                pricesRest = withContext(Dispatchers.IO) { Binance.allPrices() }
             } catch (e: Exception) {
                 // réseau indisponible : on réessaie
             }
@@ -372,6 +378,7 @@ fun TradeTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (
                             }
                         }
                         Muted("Le stop-loss et la limite de perte journalière sont obligatoires : sans eux, aucun achat n'est envoyé.")
+                        StrategyPack(cfg, tc)
                     }
                 }
             }
@@ -546,7 +553,7 @@ fun TokenDetail(
                 if (candles.isEmpty()) {
                     Muted(err ?: "Chargement du graphique…")
                 } else {
-                    CandleChart(candles, lines)
+                    CandleChart(liveCandles(candles, live, interval), lines)
                     val hi = candles.maxOf { it.high }
                     val lo = candles.minOf { it.low }
                     Muted("Haut ${fmtPrice(hi)} · Bas ${fmtPrice(lo)} · ${candles.size} bougies · données publiques Binance")
@@ -755,6 +762,7 @@ fun JournalCard(closed: List<Position>, tc: TradeConfig) {
                     BucketBlock("Par hausse sur 24 h", Journal.buckets(closed, { it.sigChg24 }, listOf(10.0, 30.0), " %"))
                     BucketBlock("Par variation de la bougie", Journal.buckets(closed, { it.sigChange }, listOf(2.0, 5.0), " %"))
                     BucketBlock("Par type de sortie", Journal.byReason(closed))
+                    BucketBlock("Par stratégie", Journal.byStrategy(closed))
                 }
                 Muted("Les tranches ne comptent que les achats issus d'une alerte (automatique ou semi-auto). Avec moins de 30 trades, les chiffres restent peu fiables.")
                 OutlinedButton(onClick = { confirm = true }, modifier = Modifier.fillMaxWidth()) {
@@ -1163,4 +1171,18 @@ fun HistoryCard(
             }
         }
     }
+}
+
+
+/** Met à jour la dernière bougie du graphique avec le prix en direct (si elle est encore en cours). */
+fun liveCandles(cs: List<Candle>, price: Double?, interval: String): List<Candle> {
+    if (price == null || cs.isEmpty()) return cs
+    val last = cs.last()
+    if (System.currentTimeMillis() >= last.time + VolumeService.intervalMs(interval)) return cs
+    val updated = last.copy(
+        close = price,
+        high = if (price > last.high) price else last.high,
+        low = if (price < last.low) price else last.low
+    )
+    return cs.dropLast(1) + updated
 }

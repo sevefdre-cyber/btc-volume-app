@@ -110,15 +110,20 @@ object Trader {
     // ------------------------------------------------------------ achat
 
     @Synchronized
-    fun buy(c: Context, base: String, source: String, sig: Signal? = null): TradeResult {
+    fun buy(
+        c: Context, base: String, source: String, sig: Signal? = null,
+        strategy: String = "", tpOv: Double? = null, slOv: Double? = null
+    ): TradeResult {
         Positions.load(c)
-        val tc = TradePrefs.load(c)
+        val tc0 = TradePrefs.load(c)
+        val tc = tc0.copy(tpPct = tpOv ?: tc0.tpPct, slPct = slOv ?: tc0.slPct)
         val block = check(tc)
         if (block != null) return TradeResult(false, block, true)
         val pair = base + "USDT"
         return try {
             val p0 = if (tc.env == "SIM") buySim(c, tc, base, pair) else buyLive(c, tc, base, pair)
             val p = if (sig != null) tag(c, p0, sig) else p0
+            if (strategy.isNotEmpty()) Positions.upsert(c, p.copy(strategy = strategy))
             val msg = "Achat $base à ${fmtPrice(p.entryPrice)} · TP ${fmtPrice(p.tp)} · SL ${fmtPrice(p.sl)} (${envLabel(tc.env)})"
             if (source != "MANUAL") Notifier.post(c, "Achat $base exécuté", msg)
             TradeResult(true, msg)

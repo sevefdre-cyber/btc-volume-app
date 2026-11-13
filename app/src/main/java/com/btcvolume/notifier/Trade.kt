@@ -86,7 +86,8 @@ data class Position(
     val sigChange: Double = 0.0,
     val sigWick: Double = 0.0,
     val sigChg24: Double = 0.0,
-    val slippagePct: Double = 0.0   // écart entre le prix du signal et le prix d'exécution
+    val slippagePct: Double = 0.0,  // écart entre le prix du signal et le prix d'exécution
+    val strategy: String = ""        // RANK, RSI, WALL ou vide (alerte / manuel)
 )
 
 object Positions {
@@ -117,7 +118,8 @@ object Positions {
                         sigChange = o.optDouble("sigChange", 0.0),
                         sigWick = o.optDouble("sigWick", 0.0),
                         sigChg24 = o.optDouble("sigChg24", 0.0),
-                        slippagePct = o.optDouble("slippagePct", 0.0)
+                        slippagePct = o.optDouble("slippagePct", 0.0),
+                        strategy = o.optString("strategy", "")
                     )
                 )
             }
@@ -165,7 +167,7 @@ object Positions {
                     .put("closeTime", p.closeTime)
                     .put("sigRatio", p.sigRatio).put("sigChange", p.sigChange)
                     .put("sigWick", p.sigWick).put("sigChg24", p.sigChg24)
-                    .put("slippagePct", p.slippagePct)
+                    .put("slippagePct", p.slippagePct).put("strategy", p.strategy)
             )
         }
         c.getSharedPreferences("positions", Context.MODE_PRIVATE)

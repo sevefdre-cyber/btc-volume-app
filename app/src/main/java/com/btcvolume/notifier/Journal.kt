@@ -75,6 +75,16 @@ object Journal {
         return out
     }
 
+    fun byStrategy(closed: List<Position>): List<Bucket> =
+        valid(closed).groupBy {
+            when (it.strategy) {
+                "RANK" -> "Classement"
+                "RSI" -> "RSI + MACD"
+                "WALL" -> "Wall Street"
+                else -> "Alertes / manuel"
+            }
+        }.map { bucketOf(it.key, it.value) }
+
     fun byReason(closed: List<Position>): List<Bucket> =
         valid(closed).groupBy { it.closeReason.ifEmpty { "?" } }.map { bucketOf(it.key, it.value) }
 }

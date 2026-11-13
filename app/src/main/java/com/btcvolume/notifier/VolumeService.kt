@@ -102,6 +102,7 @@ class VolumeService : Service() {
 
     override fun onDestroy() {
         running = false
+        LiveFeed.release("strategies")
         worker?.interrupt()
         wakeLock?.let { if (it.isHeld) it.release() }
         ScanState.running.value = false
@@ -250,6 +251,11 @@ class VolumeService : Service() {
                 // la synchronisation des positions réessaiera au prochain cycle
             }
             try {
+                StrategyRunner.manage(this)
+            } catch (e: Exception) {
+                // les stratégies réessaieront au prochain cycle
+            }
+            try {
                 Thread.sleep(pause)
             } catch (e: InterruptedException) {
                 return
@@ -284,6 +290,7 @@ class VolumeService : Service() {
             ScanState.btc.value = "Filtre Bitcoin désactivé"
         }
         val btcOk = btcReason == null
+        ScanState.btcBlocked.value = !btcOk
         val hits = if (!btcOk) emptyList() else sorted.filter { r ->
             r.ratio >= threshold &&
                 (cfg.volMax <= 0.0 || r.ratio <= cfg.volMax) &&
@@ -457,7 +464,8 @@ class VolumeService : Service() {
         val trend = if (maLong > 0.0) (maShort - maLong) / maLong * 100.0 else 0.0
         return ScanRow(
             c.base, c.price, (close - open) / open * 100.0, qv / avg, qv,
-            last.getLong(0), wick, c.chg24, atr, rangeRatio, trend
+            last.getLong(0), wick, c.chg24, atr, rangeRatio, trend,
+            curOpen = arr.getJSONArray(arr.length() - 1).getString(1).toDouble()
         )
     }
 }
