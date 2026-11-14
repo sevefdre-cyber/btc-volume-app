@@ -108,7 +108,8 @@ class OffResult(
     val effect: DoubleArray,      // tendance avec / sans, BTC avec / sans (rendement moyen par trade)
     val combos: Int,
     val symbols: Int,
-    val note: String
+    val note: String,
+    val detail: List<Pair<Combo, Acc>> = emptyList()
 )
 
 object OfflineBacktest {
@@ -263,6 +264,6 @@ object OfflineBacktest {
             meanAvg { it.trend }, meanAvg { !it.trend },
             meanAvg { it.btc }, meanAvg { !it.btc }
         )
-        return OffResult(folds, pooled, tops, effect, combos.size, symbols.size, note)
+        return OffResult(folds, pooled, tops, effect, combos.size, symbols.size, note, combos.indices.map { Pair(combos[it], total[it]) })
     }
 }

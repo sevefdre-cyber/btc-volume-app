@@ -757,6 +757,10 @@ fun JournalCard(closed: List<Position>, tc: TradeConfig) {
                     Muted("${st.n} trades · réussite ${st.wins * 100 / st.n} % · espérance ${fmtUsd(st.expectancy)} par trade")
                     Muted("Gain moyen ${fmtUsd(st.avgWin)} · perte moyenne ${fmtUsd(st.avgLoss)} · facteur de profit ${fmtPf(st.profitFactor)}")
                     Muted("Repli maximal ${fmtUsd(-st.maxDd)} · glissement moyen à l'entrée ${fmtPct(st.avgSlip)}")
+                    val mm = Journal.valid(closed).filter { it.mfePct != 0.0 || it.maePct != 0.0 }
+                    if (mm.isNotEmpty()) {
+                        Muted("Plus haut atteint en moyenne ${fmtPct(mm.map { it.mfePct }.average())} · plus bas ${fmtPct(mm.map { it.maePct }.average())} (sur ${mm.size} trades suivis)")
+                    }
                     BucketBlock("Par ratio de volume", Journal.buckets(closed, { it.sigRatio }, listOf(5.0, 10.0), "×"))
                     BucketBlock("Par mèche haute de la bougie", Journal.buckets(closed, { it.sigWick }, listOf(20.0, 40.0), " %"))
                     BucketBlock("Par hausse sur 24 h", Journal.buckets(closed, { it.sigChg24 }, listOf(10.0, 30.0), " %"))
@@ -876,6 +880,7 @@ fun BacktestCard(
                                         { status = it }
                                     )
                                 }
+                                DebugLog.logAB(cfg, tc, trail, r.first, r.second)
                                 result = r
                                 status = "Terminé."
                             } catch (e: Exception) {
@@ -904,6 +909,7 @@ fun BacktestCard(
                                 val rows = withContext(Dispatchers.IO) {
                                     Backtester.sweep(cfg, tc, count.toInt().coerceIn(5, 200), hold.toInt()) { status = it }
                                 }
+                                DebugLog.logSweep("balayage volume (API, bougies récentes)", cfg, tc, rows)
                                 sweep = rows
                                 status = "Terminé."
                             } catch (e: Exception) {
@@ -926,6 +932,7 @@ fun BacktestCard(
                                 val rows = withContext(Dispatchers.IO) {
                                     Backtester.sweepExplosion(cfg, tc, count.toInt().coerceIn(5, 200), hold.toInt()) { status = it }
                                 }
+                                DebugLog.logSweep("balayage explosion de prix (API, bougies récentes)", cfg, tc, rows)
                                 sweep = rows
                                 status = "Terminé."
                             } catch (e: Exception) {
@@ -1093,6 +1100,7 @@ fun HistoryCard(
                 val r = withContext(Dispatchers.IO) {
                     OfflineBacktest.run(ctx, cfg, tc, combos, nSym.toInt().coerceIn(5, 500), hold.toInt(), 90) { status = it }
                 }
+                DebugLog.logOffline(if (combos.any { it.minChg > 0 }) "balayage explosion de prix (historique local)" else "balayage volume (historique local)", cfg, tc, r)
                 result = r
                 status = "Terminé."
             } catch (e: Exception) {

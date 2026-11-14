@@ -106,8 +106,25 @@ object Binance {
         }
     }
 
-    /** Requête signée (HMAC-SHA256). Resynchronise l'horloge et réessaie une fois si besoin. */
+    /** Requête signée, journalisée (jamais la clé ni la signature). */
     fun signed(
+        env: String, method: String, path: String,
+        params: Map<String, String>, key: String, secret: String
+    ): String {
+        val t0 = System.currentTimeMillis()
+        val desc = "$env $method $path " + params.entries.joinToString(" ") { it.key + "=" + it.value }
+        try {
+            val r = signedRaw(env, method, path, params, key, secret)
+            DebugLog.log("API", "$desc → ok ${System.currentTimeMillis() - t0} ms")
+            return r
+        } catch (e: Exception) {
+            DebugLog.log("API", "$desc → ERREUR ${System.currentTimeMillis() - t0} ms : ${e.message}")
+            throw e
+        }
+    }
+
+    /** Requête signée (HMAC-SHA256). Resynchronise l'horloge et réessaie une fois si besoin. */
+    private fun signedRaw(
         env: String, method: String, path: String,
         params: Map<String, String>, key: String, secret: String
     ): String {

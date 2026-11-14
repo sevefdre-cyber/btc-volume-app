@@ -73,6 +73,7 @@ class VolumeService : Service() {
         super.onCreate()
         History.load(this)
         Positions.load(this)
+        DebugLog.init(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -239,6 +240,7 @@ class VolumeService : Service() {
                 return
             } catch (e: Exception) {
                 ScanState.status.value = "Erreur : ${e.message}"
+                DebugLog.log("ERREUR", "boucle du scan : ${e.message}")
                 pause = 30_000L
             }
             try {
@@ -306,6 +308,7 @@ class VolumeService : Service() {
                 lastCandle[r.symbol] != r.candle &&
                 (now - (lastAlertAt[r.symbol] ?: 0L)) >= cfg.cooldownMin * 60_000L
         }
+        if (DebugLog.on) debugScan(cfg, sorted, hits, threshold, now, btcReason, cands.size, total, errors.get())
         for (h in hits) {
             lastCandle[h.symbol] = h.candle
             lastAlertAt[h.symbol] = now
@@ -324,6 +327,50 @@ class VolumeService : Service() {
             History.add(this, hits.map { AlertItem(now, it.symbol, it.price, it.changePct, it.ratio, it.volUsdt) })
             notifyHits(hits, cfg)
             autoTrade(hits)
+        }
+    }
+
+    /** Raison pour laquelle un jeton n'est pas retenu (null = retenu). */
+    private fun rejectReason(r: ScanRow, cfg: Config, threshold: Double, now: Long): String? {
+        if (r.ratio < threshold) return "ratio<min"
+        if (cfg.volMax > 0.0 && r.ratio > cfg.volMax) return "ratio>max"
+        if (cfg.mode != "VOLUME" && abs(r.changePct) < cfg.priceThreshold) return "variation<seuil"
+        if (cfg.explosionMin > 0.0 && r.changePct < cfg.explosionMin) return "explosion<min"
+        if (r.wickPct > cfg.maxWickPct) return "meche"
+        if (cfg.max24hPct > 0.0 && r.chg24 > cfg.max24hPct) return "hausse24h"
+        if (cfg.atrMin > 0.0 && r.atrPct < cfg.atrMin) return "atr<min"
+        if (cfg.atrMax > 0.0 && r.atrPct > cfg.atrMax) return "atr>max"
+        if (cfg.rangeMinRatio > 0.0 && r.rangeRatio < cfg.rangeMinRatio) return "expansion"
+        if (cfg.trendFilter && r.trendPct < -cfg.trendTolPct) return "tendance"
+        if (cfg.upCandleOnly && r.changePct < 0) return "bougie_baissiere"
+        if (lastCandle[r.symbol] == r.candle) return "deja_alerte_bougie"
+        if (now - (lastAlertAt[r.symbol] ?: 0L) < cfg.cooldownMin * 60_000L) return "repos"
+        return null
+    }
+
+    /** Journal : résumé du scan, compteurs de rejets, et détail des 40 jetons au plus fort ratio de volume. */
+    private fun debugScan(
+        cfg: Config, sorted: List<ScanRow>, hits: List<ScanRow>, threshold: Double,
+        now: Long, btcReason: String?, nCands: Int, total: Int, errors: Int
+    ) {
+        val counts = HashMap<String, Int>()
+        for (r in sorted) {
+            val why = if (btcReason != null) "btc" else (rejectReason(r, cfg, threshold, now) ?: "retenu")
+            counts[why] = (counts[why] ?: 0) + 1
+        }
+        val summary = counts.entries.sortedByDescending { it.value }.joinToString(" ") { it.key + "=" + it.value }
+        DebugLog.log(
+            "SCAN",
+            "bougies=${cfg.interval} paires=$total candidats=$nCands analysés=${sorted.size} erreurs=$errors alertes=${hits.size} | rejets: $summary | ${ScanState.btc.value}"
+        )
+        for (r in sorted.take(40)) {
+            val why = if (btcReason != null) "btc" else (rejectReason(r, cfg, threshold, now) ?: "retenu")
+            DebugLog.csv(
+                "scan", "ts_ms,bougies,symbole,prix,variation_bougie,ratio,volume_usdt,meche,atr,expansion,tendance,hausse24h,statut",
+                "$now,${cfg.interval},${r.symbol},${r.price},${DebugLog.f(r.changePct, 3)},${DebugLog.f(r.ratio)}," +
+                    "${DebugLog.f(r.volUsdt, 0)},${DebugLog.f(r.wickPct, 1)},${DebugLog.f(r.atrPct, 3)},${DebugLog.f(r.rangeRatio)}," +
+                    "${DebugLog.f(r.trendPct, 3)},${DebugLog.f(r.chg24, 2)},$why"
+            )
         }
     }
 

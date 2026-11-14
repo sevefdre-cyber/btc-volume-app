@@ -532,6 +532,8 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc
             }
         }
 
+        DebugSection(cfg, update)
+
         Section("Détection") {
             Text("Taille des bougies")
             ChoiceRow(

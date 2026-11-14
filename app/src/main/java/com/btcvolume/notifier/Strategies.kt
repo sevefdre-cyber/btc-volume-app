@@ -175,6 +175,7 @@ object StrategyRunner {
             try {
                 step(c)
             } catch (e: Exception) {
+                DebugLog.log("ERREUR", "stratégies : ${e.message}")
                 rankStatus.value = "Erreur : ${e.message}"
             } finally {
                 busy.set(false)
@@ -231,7 +232,8 @@ object StrategyRunner {
                 else -> null
             }
             if (why != null) {
-                Trader.closeNow(c, p.id, why)
+                val cr = Trader.closeNow(c, p.id, why)
+                DebugLog.log("STRAT", "RANK sortie ${p.symbol} raison=$why rang=$rk meilleur=$best détention=${heldMin}min → ${cr.message}")
                 bestRank.remove(p.id)
             }
         }
@@ -253,7 +255,9 @@ object StrategyRunner {
             if (gain < sc.rankGain) continue
             if (r.varPct < sc.rankVarMin || r.varPct > sc.rankVarMax) continue
             lastEntry[r.symbol] = now
+            DebugLog.log("STRAT", "RANK entrée ${r.symbol} rang=${r.rank} gain=$gain/${sc.rankWindowMin}min var24h=${DebugLog.f(r.varPct)}% prix=${r.price}")
             val res = Trader.buy(c, r.symbol, "RANK", Signal(r.price, 0.0, r.varPct, 0.0, r.varPct), "RANK", sc.rankTp, sc.rankSl)
+            DebugLog.log("STRAT", "RANK résultat ${r.symbol} : ${res.message}")
             msg = res.message
             if (res.blocked) break
         }
@@ -267,7 +271,10 @@ object StrategyRunner {
         val cal = Calendar.getInstance()
         val now = cal.timeInMillis
         for (p in Positions.items.value.filter { it.status == "OPEN" && it.strategy == "WALL" && it.mode == tc.env }) {
-            if ((now - p.openTime) / 60_000L >= sc.wsHoldMin) Trader.closeNow(c, p.id, "HEURE")
+            if ((now - p.openTime) / 60_000L >= sc.wsHoldMin) {
+                val cr = Trader.closeNow(c, p.id, "HEURE")
+                DebugLog.log("STRAT", "WALL sortie ${p.symbol} durée atteinte → ${cr.message}")
+            }
         }
         val dow = cal.get(Calendar.DAY_OF_WEEK)
         if (sc.wsWeekdays && (dow == Calendar.SATURDAY || dow == Calendar.SUNDAY)) {
@@ -307,7 +314,9 @@ object StrategyRunner {
         for (r in cands) {
             if (wallCount >= sc.wsMaxEntries) break
             val v = vars[r.symbol] ?: 0.0
+            DebugLog.log("STRAT", "WALL entrée ${r.symbol} mouvement=${DebugLog.f(v)}% sur ${sc.wsLookbackMin}min var24h=${DebugLog.f(r.varPct)}% prix=${r.price}")
             val res = Trader.buy(c, r.symbol, "WALL", Signal(r.price, 0.0, v, 0.0, r.varPct), "WALL", sc.wsTp, sc.wsSl)
+            DebugLog.log("STRAT", "WALL résultat ${r.symbol} : ${res.message}")
             wallCount++
             msg = res.message
             if (res.blocked) break
@@ -369,7 +378,10 @@ object StrategyRunner {
         // sorties : RSI trop haut ou croisement baissier du MACD
         for (p in held) {
             val r = results.firstOrNull { it.base == p.symbol } ?: continue
-            if (r.rsi >= sc.rsiExit || (r.histPrev > 0 && r.hist <= 0)) Trader.closeNow(c, p.id, "INDIC")
+            if (r.rsi >= sc.rsiExit || (r.histPrev > 0 && r.hist <= 0)) {
+                val cr = Trader.closeNow(c, p.id, "INDIC")
+                DebugLog.log("STRAT", "RSI sortie ${p.symbol} rsi=${DebugLog.f(r.rsi)} macdHist=${DebugLog.f(r.hist, 6)} → ${cr.message}")
+            }
         }
         var entries = 0
         var msg: String? = null
@@ -380,7 +392,9 @@ object StrategyRunner {
                 val ok = !r.rsi.isNaN() && !r.rsiPrev.isNaN() && r.histPrev <= 0 && r.hist > 0 &&
                     r.rsi >= sc.rsiMin && r.rsi <= sc.rsiMax && r.rsi > r.rsiPrev
                 if (!ok) continue
+                DebugLog.log("STRAT", "RSI entrée ${r.base} rsi=${DebugLog.f(r.rsi)} (avant ${DebugLog.f(r.rsiPrev)}) macdHist=${DebugLog.f(r.hist, 6)} (avant ${DebugLog.f(r.histPrev, 6)}) prix=${r.price}")
                 val res = Trader.buy(c, r.base, "RSI", Signal(r.price, 0.0, 0.0, 0.0, 0.0), "RSI", sc.rsiTp, sc.rsiSl)
+                DebugLog.log("STRAT", "RSI résultat ${r.base} : ${res.message}")
                 entries++
                 msg = res.message
                 if (res.blocked) break
@@ -388,5 +402,6 @@ object StrategyRunner {
         }
         val stamp = String.format(Locale.US, "%tH:%<tM", System.currentTimeMillis())
         rsiStatus.value = "Analyse de $stamp · ${results.size} jetons · $entries entrée(s)" + (if (msg != null) " · $msg" else "")
+        DebugLog.log("STRAT", "RSI " + rsiStatus.value)
     }
 }

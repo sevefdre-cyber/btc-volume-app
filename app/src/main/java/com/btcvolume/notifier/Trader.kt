@@ -118,7 +118,10 @@ object Trader {
         val tc0 = TradePrefs.load(c)
         val tc = tc0.copy(tpPct = tpOv ?: tc0.tpPct, slPct = slOv ?: tc0.slPct)
         val block = check(tc)
-        if (block != null) return TradeResult(false, block, true)
+        if (block != null) {
+            DebugLog.log("ORDRE", "ACHAT refusé $base source=$source strat=${strategy.ifEmpty { "-" }} : $block")
+            return TradeResult(false, block, true)
+        }
         val pair = base + "USDT"
         return try {
             val p0 = if (tc.env == "SIM") buySim(c, tc, base, pair) else buyLive(c, tc, base, pair)
@@ -126,9 +129,16 @@ object Trader {
             if (strategy.isNotEmpty()) Positions.upsert(c, p.copy(strategy = strategy))
             val msg = "Achat $base à ${fmtPrice(p.entryPrice)} · TP ${fmtPrice(p.tp)} · SL ${fmtPrice(p.sl)} (${envLabel(tc.env)})"
             if (source != "MANUAL") Notifier.post(c, "Achat $base exécuté", msg)
+            DebugLog.log(
+                "ORDRE",
+                "ACHAT ok $base source=$source strat=${strategy.ifEmpty { "-" }} env=${tc.env} entrée=${p.entryPrice} " +
+                    "prixSignal=${sig?.price ?: 0.0} glissement=${DebugLog.f(p.slippagePct, 3)}% qté=${p.qty} coût=${p.cost} " +
+                    "tp=${p.tp} sl=${p.sl} OCO=${p.orderListId}"
+            )
             TradeResult(true, msg)
         } catch (e: Exception) {
             val m = e.message ?: "erreur inconnue"
+            DebugLog.log("ORDRE", "ACHAT échec $base source=$source strat=${strategy.ifEmpty { "-" }} env=${tc.env} : $m")
             if (source != "MANUAL") Notifier.post(c, "Achat $base échoué", m)
             TradeResult(false, "Achat $base échoué : $m")
         }
@@ -301,11 +311,16 @@ object Trader {
     // ------------------------------------------------------------ clôture
 
     private fun finish(c: Context, p: Position, exit: Double, netQuote: Double, reason: String): Position {
+        val ext = DebugLog.extremes(p.id)
+        val mfe = if (ext != null && p.entryPrice > 0.0) (ext[0] / p.entryPrice - 1) * 100.0 else 0.0
+        val mae = if (ext != null && p.entryPrice > 0.0) (ext[1] / p.entryPrice - 1) * 100.0 else 0.0
         val q = p.copy(
             status = "CLOSED", exitPrice = exit, pnl = netQuote - p.cost,
-            closeReason = reason, closeTime = System.currentTimeMillis()
+            closeReason = reason, closeTime = System.currentTimeMillis(),
+            mfePct = mfe, maePct = mae
         )
         Positions.upsert(c, q)
+        DebugLog.logClose(p, q)
         return q
     }
 
@@ -346,6 +361,7 @@ object Trader {
                 TradeResult(true, "${p.symbol} clôturé : ${fmtUsd(q.pnl)}")
             }
         } catch (e: Exception) {
+            DebugLog.log("ORDRE", "CLÔTURE échec ${p.symbol} id=${p.id} raison=$reason : ${e.message}")
             TradeResult(false, "Clôture de ${p.symbol} échouée : ${e.message}")
         }
     }
@@ -374,6 +390,7 @@ object Trader {
 
     private fun syncSim(c: Context, p: Position, prices: Map<String, Double>, slip: Double): Position? {
         val price = prices[p.symbol + "USDT"] ?: return null
+        DebugLog.trackPrice(p.id, p.entryPrice, price)
         return when {
             price >= p.tp -> finish(c, p, p.tp, p.qty * p.tp * SIM_FEE, "TP")
             price <= p.sl -> finish(c, p, p.sl * (1 - slip), p.qty * p.sl * (1 - slip) * SIM_FEE, "SL")

@@ -20,6 +20,7 @@ class MainActivity : ComponentActivity() {
         History.load(this)
         Positions.load(this)
         ThemeState.mode.value = Prefs.load(this).themeMode
+        DebugLog.init(this)
         setContent {
             AppTheme {
                 MainScreen()

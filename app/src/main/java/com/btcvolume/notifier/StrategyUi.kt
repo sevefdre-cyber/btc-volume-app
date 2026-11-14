@@ -95,6 +95,7 @@ fun RankStrategyCard(sc: StratConfig, set: (StratConfig) -> Unit, cfg: Config, t
                             val r = withContext(Dispatchers.IO) {
                                 RankBacktest.run(ctx, cfg, tc, sc, 300) { msg = it }
                             }
+                            DebugLog.logRank(cfg, tc, sc, r)
                             rows = r
                             msg = "Terminé."
                         } catch (e: Exception) {
@@ -150,6 +151,7 @@ fun RsiStrategyCard(sc: StratConfig, set: (StratConfig) -> Unit, tc: TradeConfig
                             val r = withContext(Dispatchers.IO) {
                                 IndicatorBacktest.run(ctx, tc, sc, 300) { msg = it }
                             }
+                            DebugLog.logInd(Prefs.load(ctx), tc, sc, r)
                             rows = r
                             msg = "Terminé."
                         } catch (e: Exception) {
@@ -206,6 +208,7 @@ fun WallStrategyCard(sc: StratConfig, set: (StratConfig) -> Unit, cfg: Config, t
                             val r = withContext(Dispatchers.IO) {
                                 WallStudy.run(ctx, cfg, tc, sc, 300) { msg = it }
                             }
+                            DebugLog.logWall(cfg, tc, sc, r)
                             res = r
                             msg = "Terminé."
                         } catch (e: Exception) {

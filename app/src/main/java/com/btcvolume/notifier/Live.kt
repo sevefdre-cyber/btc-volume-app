@@ -40,6 +40,11 @@ object LiveFeed {
     private var feedThread: Thread? = null
     private var pubThread: Thread? = null
 
+    private fun setStatus(s: String) {
+        LiveState.status.value = s
+        DebugLog.log("FLUX", s)
+    }
+
     @Synchronized
     fun acquire(c: Context, who: String) {
         holders.add(who)
@@ -59,7 +64,7 @@ object LiveFeed {
             sock?.cancel()
             feedThread?.interrupt()
             pubThread?.interrupt()
-            LiveState.status.value = "Flux arrêté"
+            setStatus("Flux arrêté")
         }
     }
 
@@ -114,7 +119,7 @@ object LiveFeed {
         while (running) {
             try {
                 val cfg = Prefs.load(c)
-                LiveState.status.value = "Connexion au flux…"
+                setStatus("Connexion au flux…")
                 val uni = universe(cfg)
                 RankEngine.setUniverse(uni)
                 val closed = CountDownLatch(1)
@@ -131,7 +136,7 @@ object LiveFeed {
                                     id++
                                     Thread.sleep(300)   // limite de Binance : 5 messages par seconde
                                 }
-                                LiveState.status.value = "En direct · ${uni.size} jetons"
+                                setStatus("En direct · ${uni.size} jetons")
                             } catch (e: Exception) {
                                 // connexion fermée pendant l'abonnement
                             }
@@ -147,7 +152,7 @@ object LiveFeed {
                     }
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                        LiveState.status.value = "Flux interrompu : ${t.message}"
+                        setStatus("Flux interrompu : ${t.message}")
                         closed.countDown()
                     }
                 })
@@ -160,7 +165,7 @@ object LiveFeed {
             } catch (e: InterruptedException) {
                 return
             } catch (e: Exception) {
-                LiveState.status.value = "Erreur du flux : ${e.message}"
+                setStatus("Erreur du flux : ${e.message}")
             }
             if (!running) return
             try {
@@ -180,6 +185,7 @@ object LiveFeed {
                 val snap = HashMap(data)
                 LiveState.ticks.value = snap
                 RankEngine.compute(snap)
+                DebugLog.onTick(c, snap)
                 StrategyRunner.tick(c)
             } catch (e: InterruptedException) {
                 return

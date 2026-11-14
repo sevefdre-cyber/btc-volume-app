@@ -18,6 +18,8 @@ data class Config(
     val maxSymbols: Int = 300,
     val autoStart: Boolean = false,
     val wakeLock: Boolean = true,
+    val debugOn: Boolean = false,             // journal de debug
+    val debugRec: Boolean = true,             // enregistreurs de marché (classement, écarts)
     val liveOn: Boolean = true,              // prix en direct (WebSocket) quand l'écran est visible
     val themeMode: String = "SYSTEM",       // SYSTEM, LIGHT ou DARK
     val maxWickPct: Double = 40.0,          // mèche haute max (% de la bougie), 100 = désactivé
@@ -61,6 +63,8 @@ object Prefs {
             maxSymbols = p.getInt("maxSymbols", d.maxSymbols),
             autoStart = p.getBoolean("autoStart", d.autoStart),
             wakeLock = p.getBoolean("wakeLock", d.wakeLock),
+            debugOn = p.getBoolean("debugOn", d.debugOn),
+            debugRec = p.getBoolean("debugRec", d.debugRec),
             liveOn = p.getBoolean("liveOn", d.liveOn),
             themeMode = p.getString("themeMode", d.themeMode) ?: d.themeMode,
             maxWickPct = p.dbl("maxWickPct", d.maxWickPct),
@@ -96,6 +100,8 @@ object Prefs {
             .putInt("maxSymbols", cfg.maxSymbols)
             .putBoolean("autoStart", cfg.autoStart)
             .putBoolean("wakeLock", cfg.wakeLock)
+            .putBoolean("debugOn", cfg.debugOn)
+            .putBoolean("debugRec", cfg.debugRec)
             .putBoolean("liveOn", cfg.liveOn)
             .putString("themeMode", cfg.themeMode)
             .putString("maxWickPct", cfg.maxWickPct.toString())
