@@ -78,6 +78,7 @@ object RankBacktest {
         val lo = FloatArray(steps)
         for ((s, b) in keep.withIndex()) {
             val cs = HistoryStore.read(c, "5m", b) ?: continue
+            val slip = if (tc.costMode == "TIER") CostModel.forSeries(cs, ms) else tc.simSlippagePct
             java.util.Arrays.fill(op, Float.NaN)
             java.util.Arrays.fill(hi, Float.NaN)
             java.util.Arrays.fill(lo, Float.NaN)
@@ -232,7 +233,7 @@ object IndicatorBacktest {
                         for (b in chunk) {
                             val cs = HistoryStore.read(c, tf, b) ?: continue
                             if (cs.size < 120) continue
-                            res.addAll(simulate(cs, sc, slip))
+                            res.addAll(simulate(cs, sc, if (tc.costMode == "TIER") CostModel.forSeries(cs, VolumeService.intervalMs(tf)) else slip))
                         }
                         res
                     })
@@ -303,7 +304,7 @@ object WallStudy {
                     cnt[slot]++
                 }
             }
-            val series = Backtester.Series(cs, f)
+            val series = Backtester.Series(cs, f, if (tc.costMode == "TIER") CostModel.forSeries(cs, ms) else -1.0)
             for (tr in Backtester.trades(series, 0.0, 0.0, tcW, 0.0, hold, cfgW, tc.simSlippagePct)) {
                 val lt = tr.first + tz.getOffset(tr.first)
                 val dow = (((lt / 86_400_000L) + 4) % 7).toInt()

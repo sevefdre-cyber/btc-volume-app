@@ -357,8 +357,19 @@ fun TradeTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc: (
                             updateTc(tc.copy(maxPositions = it.toInt().coerceAtLeast(0)))
                         }
                         NumField("Limite de perte par jour (USDT)", tc.dailyLossLimit) { updateTc(tc.copy(dailyLossLimit = it)) }
+                        NumField("Entrées maximales par scan (achats automatiques)", tc.maxEntriesPerScan.toDouble()) {
+                            updateTc(tc.copy(maxEntriesPerScan = it.toInt().coerceAtLeast(1)))
+                        }
+                        NumField("Durée maximale des achats du scan (minutes, 0 = aucune)", tc.holdMin.toDouble()) {
+                            updateTc(tc.copy(holdMin = it.toInt().coerceAtLeast(0)))
+                        }
                         if (tc.env == "SIM") {
-                            NumField("Glissement simulé (%)", tc.simSlippagePct) { updateTc(tc.copy(simSlippagePct = it)) }
+                            Text("Coûts simulés")
+                            ChoiceRow(listOf("TIER" to "Par jeton (recommandé)", "FIXED" to "Fixe"), tc.costMode) { updateTc(tc.copy(costMode = it)) }
+                            Muted("Par jeton : exécution au prix réel du carnet d'ordres à l'achat et à la vente, et coût estimé selon la liquidité pour les backtests. Fixe : même glissement pour tous.")
+                            if (tc.costMode == "FIXED") {
+                                NumField("Glissement simulé (%)", tc.simSlippagePct) { updateTc(tc.copy(simSlippagePct = it)) }
+                            }
                         }
                         if (tc.trigger == "AUTO") {
                             NumField("Ratio de volume minimum pour acheter (×)", tc.autoMinRatio) {
@@ -1063,6 +1074,7 @@ fun HistoryCard(
     var hold by remember { mutableStateOf(48.0) }
     var nSym by remember { mutableStateOf(300.0) }
     var result by remember { mutableStateOf<OffResult?>(null) }
+    var evRes by remember { mutableStateOf<EvResult?>(null) }
     val running by HistState.running.collectAsState()
     val hStatus by HistState.status.collectAsState()
     val done by HistState.done.collectAsState()
@@ -1173,9 +1185,33 @@ fun HistoryCard(
                     enabled = !busy && !running,
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Balayage explosion de prix (12 mois)") }
+                Muted("Balayage étendu : repère les hausses brutales (de 2 à 10 %) une seule fois, puis évalue environ 90 000 combinaisons de filtres, de TP/SL et de durées. Affiche un seuil de hasard pour ne pas se laisser tromper par le grand nombre d'essais.")
+                OutlinedButton(
+                    onClick = {
+                        busy = true
+                        evRes = null
+                        scope.launch {
+                            try {
+                                val r = withContext(Dispatchers.IO) {
+                                    EventSweep.run(ctx, cfg, tc, nSym.toInt().coerceIn(5, 500)) { status = it }
+                                }
+                                DebugLog.logEvents(cfg, tc, r)
+                                evRes = r
+                                status = "Terminé."
+                            } catch (e: Exception) {
+                                status = "Échec : ${e.message}"
+                            }
+                            busy = false
+                        }
+                    },
+                    enabled = !busy && !running,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Balayage étendu par événements (~90 000)") }
                 if (status.isNotEmpty()) Muted(status)
                 val r = result
                 if (r != null) OfflineResultCard(r, cfg, tc, update, updateTc)
+                val ev = evRes
+                if (ev != null) EvResultCard(ev, cfg, tc, update, updateTc)
             }
         }
     }

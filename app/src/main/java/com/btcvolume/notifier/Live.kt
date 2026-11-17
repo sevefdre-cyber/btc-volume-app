@@ -187,6 +187,7 @@ object LiveFeed {
                 RankEngine.compute(snap)
                 DebugLog.onTick(c, snap)
                 StrategyRunner.tick(c)
+                Detector.tick(c)
             } catch (e: InterruptedException) {
                 return
             } catch (e: Exception) {

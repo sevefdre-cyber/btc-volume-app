@@ -277,7 +277,7 @@ fun RankingScreen(onView: (String) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item { Title("Volume Scanner") }
-        item { ChoiceRow(listOf("SCAN" to "Scan par bougie", "RANK" to "Classement live"), "RANK") { onView(it) } }
+        item { ChoiceRow(listOf("SCAN" to "Scan par bougie", "RANK" to "Classement live", "ACT" to "Plus actifs"), "RANK") { onView(it) } }
         item {
             AppCard {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

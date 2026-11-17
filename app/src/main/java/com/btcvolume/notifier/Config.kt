@@ -18,6 +18,14 @@ data class Config(
     val maxSymbols: Int = 300,
     val autoStart: Boolean = false,
     val wakeLock: Boolean = true,
+    val btcTrendTol: Double = 0.5,           // tolérance de baisse de la tendance BTC (%)
+    val detOn: Boolean = false,              // détecteur de mouvements : notifications
+    val detWindowMin: Int = 2,
+    val detMovePct: Double = 1.5,
+    val detCooldownMin: Int = 10,
+    val detTop: Int = 5,
+    val detGapSec: Int = 60,
+    val detUpOnly: Boolean = true,
     val debugOn: Boolean = false,             // journal de debug
     val debugRec: Boolean = true,             // enregistreurs de marché (classement, écarts)
     val liveOn: Boolean = true,              // prix en direct (WebSocket) quand l'écran est visible
@@ -63,6 +71,14 @@ object Prefs {
             maxSymbols = p.getInt("maxSymbols", d.maxSymbols),
             autoStart = p.getBoolean("autoStart", d.autoStart),
             wakeLock = p.getBoolean("wakeLock", d.wakeLock),
+            btcTrendTol = p.dbl("btcTrendTol", d.btcTrendTol),
+            detOn = p.getBoolean("detOn", d.detOn),
+            detWindowMin = p.getInt("detWindowMin", d.detWindowMin),
+            detMovePct = p.dbl("detMovePct", d.detMovePct),
+            detCooldownMin = p.getInt("detCooldownMin", d.detCooldownMin),
+            detTop = p.getInt("detTop", d.detTop),
+            detGapSec = p.getInt("detGapSec", d.detGapSec),
+            detUpOnly = p.getBoolean("detUpOnly", d.detUpOnly),
             debugOn = p.getBoolean("debugOn", d.debugOn),
             debugRec = p.getBoolean("debugRec", d.debugRec),
             liveOn = p.getBoolean("liveOn", d.liveOn),
@@ -100,6 +116,14 @@ object Prefs {
             .putInt("maxSymbols", cfg.maxSymbols)
             .putBoolean("autoStart", cfg.autoStart)
             .putBoolean("wakeLock", cfg.wakeLock)
+            .putString("btcTrendTol", cfg.btcTrendTol.toString())
+            .putBoolean("detOn", cfg.detOn)
+            .putInt("detWindowMin", cfg.detWindowMin)
+            .putString("detMovePct", cfg.detMovePct.toString())
+            .putInt("detCooldownMin", cfg.detCooldownMin)
+            .putInt("detTop", cfg.detTop)
+            .putInt("detGapSec", cfg.detGapSec)
+            .putBoolean("detUpOnly", cfg.detUpOnly)
             .putBoolean("debugOn", cfg.debugOn)
             .putBoolean("debugRec", cfg.debugRec)
             .putBoolean("liveOn", cfg.liveOn)

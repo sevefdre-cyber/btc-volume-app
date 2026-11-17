@@ -19,7 +19,10 @@ data class TradeConfig(
     val autoMinRatio: Double = 5.0,
     val buyOnlyUp: Boolean = true,
     val realAutoOk: Boolean = false,
-    val simSlippagePct: Double = 0.3     // glissement simulé en mode Simulation
+    val simSlippagePct: Double = 0.3,    // glissement simulé fixe (mode « Fixe »)
+    val costMode: String = "TIER",       // TIER = coût estimé par jeton, FIXED = glissement fixe
+    val maxEntriesPerScan: Int = 2,      // plafond d'achats automatiques par scan (évite les rafales corrélées)
+    val holdMin: Int = 0                 // durée maximale des achats du scan, en minutes (0 = aucune)
 )
 
 private fun SharedPreferences.dbl(key: String, def: Double): Double =
@@ -44,7 +47,10 @@ object TradePrefs {
             autoMinRatio = p.dbl("autoMinRatio", d.autoMinRatio),
             buyOnlyUp = p.getBoolean("buyOnlyUp", d.buyOnlyUp),
             realAutoOk = p.getBoolean("realAutoOk", d.realAutoOk),
-            simSlippagePct = p.dbl("simSlippagePct", d.simSlippagePct)
+            simSlippagePct = p.dbl("simSlippagePct", d.simSlippagePct),
+            costMode = p.getString("costMode", d.costMode) ?: d.costMode,
+            maxEntriesPerScan = p.getInt("maxEntriesPerScan", d.maxEntriesPerScan),
+            holdMin = p.getInt("holdMin", d.holdMin)
         )
     }
 
@@ -62,6 +68,9 @@ object TradePrefs {
             .putBoolean("buyOnlyUp", t.buyOnlyUp)
             .putBoolean("realAutoOk", t.realAutoOk)
             .putString("simSlippagePct", t.simSlippagePct.toString())
+            .putString("costMode", t.costMode)
+            .putInt("maxEntriesPerScan", t.maxEntriesPerScan)
+            .putInt("holdMin", t.holdMin)
             .apply()
     }
 }

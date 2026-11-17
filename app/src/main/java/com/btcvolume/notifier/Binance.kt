@@ -173,6 +173,16 @@ object Binance {
 
     // ---- données publiques (toujours le marché réel, pour prix et graphiques) ----
 
+    /** Meilleur prix d'achat et de vente actuels : (bid, ask), ou null si indisponible. */
+    fun bookTicker(pair: String): Pair<Double, Double>? = try {
+        val o = JSONObject(publicGet("REAL", "/api/v3/ticker/bookTicker", mapOf("symbol" to pair)))
+        val bid = o.getString("bidPrice").toDouble()
+        val ask = o.getString("askPrice").toDouble()
+        if (bid > 0.0 && ask > 0.0) Pair(bid, ask) else null
+    } catch (e: Exception) {
+        null
+    }
+
     fun price(pair: String): Double =
         JSONObject(publicGet("REAL", "/api/v3/ticker/price", mapOf("symbol" to pair)))
             .getString("price").toDouble()

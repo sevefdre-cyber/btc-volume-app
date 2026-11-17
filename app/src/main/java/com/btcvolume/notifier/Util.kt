@@ -54,12 +54,12 @@ class BtcInfo(val chg1h: Double, val trend: Double, val shock: Double)
 object BtcRules {
     fun blocked(cfg: Config, chg1h: Double, trend: Double, shock: Double): Boolean =
         (cfg.btcDropPct > 0 && chg1h < -cfg.btcDropPct) ||
-            (cfg.btcTrendFilter && trend < 0) ||
+            (cfg.btcTrendFilter && trend < -cfg.btcTrendTol) ||
             (cfg.btcShockMax > 0 && shock > cfg.btcShockMax)
 
     fun reason(cfg: Config, i: BtcInfo): String? = when {
         cfg.btcDropPct > 0 && i.chg1h < -cfg.btcDropPct -> "BTC en baisse (" + fmtPct(i.chg1h) + " sur 1 h)"
-        cfg.btcTrendFilter && i.trend < 0 -> "tendance BTC baissière"
+        cfg.btcTrendFilter && i.trend < -cfg.btcTrendTol -> "tendance BTC baissière"
         cfg.btcShockMax > 0 && i.shock > cfg.btcShockMax -> "choc de volatilité BTC (x" + String.format(Locale.US, "%.1f", i.shock) + ")"
         else -> null
     }

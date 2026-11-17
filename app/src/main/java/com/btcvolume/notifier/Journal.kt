@@ -81,6 +81,7 @@ object Journal {
                 "RANK" -> "Classement"
                 "RSI" -> "RSI + MACD"
                 "WALL" -> "Wall Street"
+                "SCAN" -> "Scan automatique"
                 else -> "Alertes / manuel"
             }
         }.map { bucketOf(it.key, it.value) }
@@ -139,7 +140,7 @@ object Backtester {
         val btcShock: DoubleArray
     )
 
-    class Series(val cs: List<Candle>, val f: Feat)
+    class Series(val cs: List<Candle>, val f: Feat, val slip: Double = -1.0)
 
     class BtcGrid(
         val idx: HashMap<Long, Int>,
@@ -302,6 +303,7 @@ object Backtester {
         val f = s.f
         val n = cs.size
         val cooldown = cfg.cooldownMin * 60_000L
+        val sp = if (s.slip >= 0.0) s.slip else slip
         val out = ArrayList<Pair<Long, BtExit>>()
         var blockedUntil = -1
         var lastSigTime = 0L
@@ -323,8 +325,8 @@ object Backtester {
                 (cs[i].time - lastSigTime) >= cooldown
             ) {
                 lastSigTime = cs[i].time
-                val entry = cs[i + 1].open * (1 + slip / 100)
-                val ex = exitTrade(cs, i + 1, entry, tc, trail, hold, slip)
+                val entry = cs[i + 1].open * (1 + sp / 100)
+                val ex = exitTrade(cs, i + 1, entry, tc, trail, hold, sp)
                 out.add(Pair(cs[i + 1].time, ex))
                 blockedUntil = ex.idx
             }
@@ -365,7 +367,7 @@ object Backtester {
         )
     }
 
-    private fun load(bases: List<String>, interval: String, pages: Int = 1): List<Series> {
+    private fun load(bases: List<String>, interval: String, pages: Int = 1, tier: Boolean = false): List<Series> {
         val ms = VolumeService.intervalMs(interval)
         val btc = btcGrid()
         val pool = Executors.newFixedThreadPool(6)
@@ -374,7 +376,7 @@ object Backtester {
                 pool.submit(Callable<Series?> {
                     try {
                         val cs = Binance.candlesPaged(b + "USDT", interval, pages)
-                        if (cs.size > WINDOW + 5) Series(cs, features(cs, ms, btc)) else null
+                        if (cs.size > WINDOW + 5) Series(cs, features(cs, ms, btc), if (tier) CostModel.forSeries(cs, ms) else -1.0) else null
                     } catch (e: Exception) {
                         null
                     }
@@ -394,7 +396,7 @@ object Backtester {
         progress("Chargement de la liste des cryptos…")
         val bases = candidates(cfg, maxSymbols)
         progress("Téléchargement des bougies…")
-        val series = load(bases, cfg.interval)
+        val series = load(bases, cfg.interval, 1, tc.costMode == "TIER")
         val thr = if (cfg.volThreshold < 1.05) 1.05 else cfg.volThreshold
         val minR = max(thr, tc.autoMinRatio)
         val slip = tc.simSlippagePct
@@ -429,7 +431,7 @@ object Backtester {
         val rows = ArrayList<SweepRow>()
         for (iv in intervals) {
             progress("Téléchargement des bougies $iv…")
-            val series = load(bases, iv)
+            val series = load(bases, iv, 1, tc.costMode == "TIER")
             if (series.isEmpty()) continue
             val tMin = series.minOf { it.cs.first().time }
             val tMax = series.maxOf { it.cs.last().time }
@@ -487,7 +489,7 @@ object Backtester {
         for (st in setups) {
             val iv = st.first
             progress("Téléchargement des bougies $iv (plusieurs pages)…")
-            val series = load(bases, iv, st.second)
+            val series = load(bases, iv, st.second, tc.costMode == "TIER")
             if (series.isEmpty()) continue
             val tMin = series.minOf { it.cs.first().time }
             val tMax = series.maxOf { it.cs.last().time }

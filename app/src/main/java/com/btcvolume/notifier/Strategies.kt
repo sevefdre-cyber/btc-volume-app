@@ -187,9 +187,23 @@ object StrategyRunner {
     fun manage(c: Context) {
         val sc = StratPrefs.load(c)
         val tc = TradePrefs.load(c)
-        val need = (sc.rankOn || sc.wsOn) && tc.enabled
+        val cfg = Prefs.load(c)
+        val need = ((sc.rankOn || sc.wsOn) && tc.enabled) || cfg.detOn
         if (need) LiveFeed.acquire(c, "strategies") else LiveFeed.release("strategies")
+        scanExits(c, tc)
         rsiCheck(c, sc, tc)
+    }
+
+    /** Durée maximale des positions ouvertes par le scan automatique (étiquette SCAN). */
+    private fun scanExits(c: Context, tc: TradeConfig) {
+        if (tc.holdMin <= 0) return
+        val now = System.currentTimeMillis()
+        for (p in Positions.items.value) {
+            if (p.status == "OPEN" && p.strategy == "SCAN" && p.mode == tc.env && (now - p.openTime) / 60_000L >= tc.holdMin) {
+                val cr = Trader.closeNow(c, p.id, "DUREE")
+                DebugLog.log("STRAT", "SCAN sortie ${p.symbol} durée de ${tc.holdMin} min atteinte → ${cr.message}")
+            }
+        }
     }
 
     private fun step(c: Context) {

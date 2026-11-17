@@ -35,7 +35,7 @@ fun DebugSection(cfg: Config, update: (Config) -> Unit) {
         }
         SwitchRow(
             "Enregistreurs de marché",
-            "Classement du top 30 toutes les 10 s et écarts acheteur-vendeur toutes les 5 min (environ 7 Mo par jour). Demande le flux en direct.",
+            "Classement du top 30 toutes les 10 s et écarts acheteur-vendeur toutes les 5 min (environ 7 Mo par jour). Actifs même journal éteint, tant que le flux en direct tourne.",
             cfg.debugRec
         ) {
             update(cfg.copy(debugRec = it))

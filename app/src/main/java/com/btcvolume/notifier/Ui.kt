@@ -227,6 +227,10 @@ fun ScannerTab(cfg: Config, update: (Config) -> Unit) {
     val btc by ScanState.btc.collectAsState()
     var view by remember { mutableStateOf("SCAN") }
     val liveMap by LiveState.ticks.collectAsState()
+    if (view == "ACT") {
+        ActiveScreen { view = it }
+        return
+    }
     if (view == "RANK") {
         RankingScreen { view = it }
         return
@@ -237,7 +241,7 @@ fun ScannerTab(cfg: Config, update: (Config) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item { Title("Volume Scanner") }
-        item { ChoiceRow(listOf("SCAN" to "Scan par bougie", "RANK" to "Classement live"), view) { view = it } }
+        item { ChoiceRow(listOf("SCAN" to "Scan par bougie", "RANK" to "Classement live", "ACT" to "Plus actifs"), view) { view = it } }
         item {
             AppCard {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -532,6 +536,8 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc
             }
         }
 
+        DetectorSection(cfg, update)
+
         DebugSection(cfg, update)
 
         Section("Détection") {
@@ -614,6 +620,11 @@ fun SettingsTab(cfg: Config, update: (Config) -> Unit, tc: TradeConfig, updateTc
                     "Moyenne 10 bougies ≥ moyenne 30 (bougies de 15 min)",
                     cfg.btcTrendFilter
                 ) { update(cfg.copy(btcTrendFilter = it)) }
+                if (cfg.btcTrendFilter) {
+                    NumField("Tolérance de baisse de la tendance BTC (%)", cfg.btcTrendTol) {
+                        update(cfg.copy(btcTrendTol = it))
+                    }
+                }
                 NumField("Choc de volatilité BTC maximal (×, 0 = désactivé)", cfg.btcShockMax) {
                     update(cfg.copy(btcShockMax = it))
                 }

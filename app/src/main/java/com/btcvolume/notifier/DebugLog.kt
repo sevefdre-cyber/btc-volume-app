@@ -87,8 +87,8 @@ object DebugLog {
         append("events-" + dayStamp() + ".log", nowStamp() + " | " + cat + " | " + msg)
     }
 
-    fun csv(base: String, header: String, line: String) {
-        if (!on) return
+    fun csv(base: String, header: String, line: String, force: Boolean = false) {
+        if (!on && !force) return
         append(base + "-" + dayStamp() + ".csv", line, header)
     }
 
@@ -130,7 +130,7 @@ object DebugLog {
             val t = snap[p.symbol + "USDT"] ?: continue
             trackPrice(p.id, p.entryPrice, t.price)
         }
-        if (!on || !rec) return
+        if (!rec) return   // les enregistreurs fonctionnent même si le journal de debug est éteint
         val now = System.currentTimeMillis()
         if (now - lastRank >= 10_000L) {
             lastRank = now
@@ -142,7 +142,7 @@ object DebugLog {
                     sb.append(';').append(r.symbol).append(',').append(r.rank).append(',').append(r.price)
                         .append(',').append(f(r.varPct, 3)).append(',').append(r.d15)
                 }
-                csv("ranks", "ts_ms;symbole,rang,prix,variation24h_pct,places15min", sb.toString())
+                csv("ranks", "ts_ms;symbole,rang,prix,variation24h_pct,places15min", sb.toString(), true)
             }
         }
         if (now - lastSpread >= 300_000L) {
@@ -175,7 +175,8 @@ object DebugLog {
             val mid = (bid + ask) / 2.0
             csv(
                 "spreads", "ts_ms,symbole,bid,ask,spread_pct,qte_bid,qte_ask",
-                "$ts,${o.getString("symbol")},$bid,$ask,${f((ask - bid) / mid * 100.0, 4)},${o.optString("bidQty")},${o.optString("askQty")}"
+                "$ts,${o.getString("symbol")},$bid,$ask,${f((ask - bid) / mid * 100.0, 4)},${o.optString("bidQty")},${o.optString("askQty")}",
+                true
             )
         }
     }
@@ -301,6 +302,25 @@ object DebugLog {
         lines.add("DANS la fenêtre : " + bt(r.inWin))
         lines.add("HORS fenêtre    : " + bt(r.outWin))
         btWrite("étude de l'heure de Wall Street", lines)
+    }
+
+    fun logEvents(cfg: Config, tc: TradeConfig, r: EvResult) {
+        val lines = ArrayList<String>()
+        lines.add(ctxLine(cfg, tc) + " coûts=${tc.costMode}")
+        lines.add("combinaisons=${r.total} événements=${r.events} seuil de hasard t=${f(r.threshold)} au-dessus=${r.above}")
+        for ((i, fo) in r.folds.withIndex()) {
+            val row = fo.row
+            val tr = fo.train
+            val va = fo.valid
+            if (row == null || tr == null || va == null) {
+                lines.add("walk-forward période ${i + 1} : aucune combinaison")
+            } else {
+                lines.add("walk-forward période ${i + 1} : ${evLabel(row)} | optim: ${ag(tr)} | valid: ${ag(va)}")
+            }
+        }
+        lines.add("total validé : ${ag(r.pooled)}")
+        for ((i, t) in r.top.withIndex()) lines.add("top ${i + 1} : ${evLabel(t)} | ${ag(t.all)} | t=${f(t.t)}")
+        btWrite("balayage étendu par événements (historique local)", lines)
     }
 
     // ---------------------------------------------------------------- export

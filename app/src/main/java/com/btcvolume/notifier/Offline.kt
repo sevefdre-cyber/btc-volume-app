@@ -190,7 +190,7 @@ object OfflineBacktest {
                             val cs = HistoryStore.read(c, iv, base) ?: continue
                             if (cs.size < 100) continue
                             val ms = VolumeService.intervalMs(iv)
-                            val series = Backtester.Series(cs, Backtester.features(cs, ms, grid))
+                            val series = Backtester.Series(cs, Backtester.features(cs, ms, grid), if (tc.costMode == "TIER") CostModel.forSeries(cs, ms) else -1.0)
                             val spanLen = (spanDays[iv] ?: 365) * dayMs
                             val spanStart = now - spanLen
                             for (k in byIv[iv] ?: emptyList()) {

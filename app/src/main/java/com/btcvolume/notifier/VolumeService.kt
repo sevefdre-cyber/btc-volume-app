@@ -207,11 +207,18 @@ class VolumeService : Service() {
             return
         }
         Positions.load(this)
-        for (h in hits) {
+        val ordered = if (Prefs.load(this).explosionMin > 0.0) hits.sortedByDescending { it.changePct } else hits
+        var entries = 0
+        for (h in ordered) {
+            if (entries >= tc.maxEntriesPerScan) {
+                DebugLog.log("STRAT", "SCAN plafond de ${tc.maxEntriesPerScan} entrée(s) par scan atteint")
+                break
+            }
             if (h.ratio < tc.autoMinRatio) continue
             if (tc.buyOnlyUp && h.changePct < 0) continue
             if (Positions.items.value.any { it.symbol == h.symbol && it.mode == tc.env && it.status == "OPEN" }) continue
-            val r = Trader.buy(this, h.symbol, "AUTO", Signal(h.price, h.ratio, h.changePct, h.wickPct, h.chg24))
+            val r = Trader.buy(this, h.symbol, "AUTO", Signal(h.price, h.ratio, h.changePct, h.wickPct, h.chg24), "SCAN")
+            if (r.ok) entries++
             if (r.blocked) break
         }
     }

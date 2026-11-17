@@ -156,7 +156,8 @@ object Trader {
     }
 
     private fun buySim(c: Context, tc: TradeConfig, base: String, pair: String): Position {
-        val price = Binance.price(pair) * (1 + tc.simSlippagePct / 100.0)
+        val bk = if (tc.costMode == "TIER") Binance.bookTicker(pair) else null
+        val price = if (bk != null) bk.second * (1 + CostModel.EXTRA / 100.0) else Binance.price(pair) * (1 + tc.simSlippagePct / 100.0)
         val now = System.currentTimeMillis()
         val p = Position(
             id = now, symbol = base, mode = "SIM", entryPrice = price,
@@ -331,7 +332,9 @@ object Trader {
         val pair = p.symbol + "USDT"
         return try {
             if (p.mode == "SIM") {
-                val price = Binance.price(pair) * (1 - TradePrefs.load(c).simSlippagePct / 100.0)
+                val tcc = TradePrefs.load(c)
+                val bk = if (tcc.costMode == "TIER") Binance.bookTicker(pair) else null
+                val price = if (bk != null) bk.first * (1 - CostModel.EXTRA / 100.0) else Binance.price(pair) * (1 - tcc.simSlippagePct / 100.0)
                 val q = finish(c, p, price, p.qty * price * SIM_FEE, reason)
                 TradeResult(true, "${p.symbol} clôturé : ${fmtUsd(q.pnl)}")
             } else {
@@ -453,14 +456,16 @@ object Trader {
         Positions.load(c)
         val open = Positions.items.value.filter { it.status == "OPEN" }
         if (open.isEmpty()) return
-        val slip = TradePrefs.load(c).simSlippagePct / 100.0
+        val tcNow = TradePrefs.load(c)
+        val slip = tcNow.simSlippagePct / 100.0
+        val tier = tcNow.costMode == "TIER"
         var prices: Map<String, Double>? = null
         for (p in open) {
             try {
                 var closed: Position? = null
                 if (p.mode == "SIM") {
                     val pr = prices ?: Binance.allPrices().also { prices = it }
-                    closed = syncSim(c, p, pr, slip)
+                    closed = syncSim(c, p, pr, if (tier) CostModel.liveSlip(p.symbol) / 100.0 else slip)
                 } else if (syncLive(c, p)) {
                     closed = Positions.get(c, p.id)
                 }
